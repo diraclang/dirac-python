@@ -1,0 +1,9 @@
+<classify n=number|
+  |eval result=label>
+    if n % 2 == 0:
+        label = "even"
+    else:
+        label = "odd"
+  |output>|variable name=label>
+
+|classify n=10>

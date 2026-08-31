@@ -1,13 +1,15 @@
 # DIRAC Python Implementation
 
-**Status**: � **Core runtime implemented** - XML parsing, variables, subroutines, control flow, `<eval>` (Python), and shell execution are working and tested. Braket notation, imports/packages, and LLM integration are not yet ported - see "Python Implementation Goals" below.
+**Status**: Core runtime implemented - XML parsing, bra-ket (`.bk`) notation, variables, subroutines, control flow, `<eval>` (Python), shell execution, and an interactive shell are working and tested. Imports/packages and LLM integration are not yet ported - see "Python Implementation Goals" below.
 
 ## Quick Start
 
 ```bash
 cd dirac-python
 python3 -m unittest discover -s tests -v   # run the test suite
-python3 -m dirac.cli examples/hello.di      # run a .di script
+python3 -m dirac.cli examples/hello.di      # run a .di (XML) script
+python3 -m dirac.cli examples/hello.bk      # run a .bk (bra-ket) script
+python3 -m dirac.shell                      # interactive shell (:braket to toggle syntax)
 ```
 
 ```python
@@ -106,7 +108,7 @@ The reference implementation in Node.js/TypeScript includes:
 
 ### Phase 1: Core Runtime - ✅ Implemented
 - [x] XML parser for `.di` files (`dirac/runtime/parser.py`, via `xml.etree.ElementTree`)
-- [ ] Braket parser for `.bk` files (indentation-based) - not yet ported
+- [x] Braket parser for `.bk` files (`dirac/runtime/braket_parser.py`), incl. embedded Python code blocks keeping their own relative indentation (see `tests/test_braket.py`)
 - [x] Variable system with substitution (`dirac/runtime/session.py`)
 - [x] Subroutine registration and execution, incl. `visible="subroutine"/"variable"/"both"` scope promotion (`dirac/tags/subroutine.py`, `dirac/tags/call.py`)
 - [x] Basic tags: `<output>`, `<defvar>`, `<variable>`, `<assign>`, `<eval>`, `<return>`
@@ -120,7 +122,6 @@ The reference implementation in Node.js/TypeScript includes:
 - [ ] `<input source="stdin"/"file">` implemented but lightly tested
 
 ### Known Limitations (compared to the Node.js reference)
-- No braket (`.bk`) notation support yet
 - No `<import>` / package resolution (Phase 3)
 - No `<llm>` tag (Phase 4)
 - `<call>`/`<subroutine>` extend-chain (`extends="parent"`) and positional arguments are not ported
