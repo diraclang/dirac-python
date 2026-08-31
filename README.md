@@ -1,6 +1,21 @@
 # DIRAC Python Implementation
 
-**Status**: 🚧 **Seeking Contributors** - This is a proposed Python port of the DIRAC language runtime.
+**Status**: � **Core runtime implemented** - XML parsing, variables, subroutines, control flow, `<eval>` (Python), and shell execution are working and tested. Braket notation, imports/packages, and LLM integration are not yet ported - see "Python Implementation Goals" below.
+
+## Quick Start
+
+```bash
+cd dirac-python
+python3 -m unittest discover -s tests -v   # run the test suite
+python3 -m dirac.cli examples/hello.di      # run a .di script
+```
+
+```python
+from dirac import execute
+
+output = execute('<dirac><output>Hello, DIRAC Python!</output></dirac>')
+print(output)
+```
 
 ## Overview
 
@@ -89,19 +104,28 @@ The reference implementation in Node.js/TypeScript includes:
 
 ## Python Implementation Goals
 
-### Phase 1: Core Runtime
-- [ ] XML parser for `.di` files
-- [ ] Braket parser for `.bk` files (indentation-based)
-- [ ] Variable system with substitution
-- [ ] Subroutine registration and execution
-- [ ] Basic tags: `<output>`, `<defvar>`, `<variable>`, `<eval>`
-- [ ] Python code execution in `<eval>` blocks (instead of JavaScript)
+### Phase 1: Core Runtime - ✅ Implemented
+- [x] XML parser for `.di` files (`dirac/runtime/parser.py`, via `xml.etree.ElementTree`)
+- [ ] Braket parser for `.bk` files (indentation-based) - not yet ported
+- [x] Variable system with substitution (`dirac/runtime/session.py`)
+- [x] Subroutine registration and execution, incl. `visible="subroutine"/"variable"/"both"` scope promotion (`dirac/tags/subroutine.py`, `dirac/tags/call.py`)
+- [x] Basic tags: `<output>`, `<defvar>`, `<variable>`, `<assign>`, `<eval>`, `<return>`
+- [x] Python code execution in `<eval>` blocks (instead of JavaScript) - supports both a top-level `return` (wrapped in a function) and direct execution with `result="var"` read-back
 
-### Phase 2: Control Flow & I/O
-- [ ] Loops: `<loop>`, `<foreach>`, `<break>`
-- [ ] Conditionals: `<if>` with test conditions
-- [ ] Standard input: `<stdin>`
-- [ ] Shell execution: `<execute>`
+### Phase 2: Control Flow & I/O - ✅ Mostly implemented
+- [x] Loops: `<loop count="n">`, `<break>`
+- [x] `<foreach from="$var|literal" as="item">` (variable/literal lists only; inline-XML-evaluation and `xpath` filtering not yet ported)
+- [x] Conditionals: `<if><cond>/<then>/<else></if>` and attribute-based `<test-if test="..." eq="...">`
+- [x] Shell execution: `<system>` (synchronous only; `background="true"` not yet ported)
+- [ ] `<input source="stdin"/"file">` implemented but lightly tested
+
+### Known Limitations (compared to the Node.js reference)
+- No braket (`.bk`) notation support yet
+- No `<import>` / package resolution (Phase 3)
+- No `<llm>` tag (Phase 4)
+- `<call>`/`<subroutine>` extend-chain (`extends="parent"`) and positional arguments are not ported
+- `<system background="true">` (detached/fire-and-forget processes) not ported
+- `<parameters select="*"/">` dynamic parameter introspection not ported (direct `param-*` binding works)
 
 ### Phase 3: Module System
 - [ ] Import resolution for Python packages (pip)
@@ -247,11 +271,10 @@ def execute_output(session, element):
 
 ## Current Status
 
-**This is a greenfield project.** No code exists yet. We're looking for:
+The core runtime (Phase 1, most of Phase 2) is implemented in `dirac-python/dirac/` with a passing test suite in `dirac-python/tests/test_core.py` (15 tests, mirroring a representative subset of the Node.js `.test.di` suite). We're looking for:
 
-- **Primary maintainer**: Someone to architect and lead the Python implementation
-- **Contributors**: Developers interested in parser design, language runtimes, ML integration
-- **Testers**: Help port test cases and validate behavior matches Node.js version
+- **Contributors**: Developers interested in the braket parser, import/package resolution, and LLM integration (Phases 3-4)
+- **Testers**: Help port the remaining `.test.di` cases from the Node.js repo and validate behavior matches
 
 ## Resources
 
