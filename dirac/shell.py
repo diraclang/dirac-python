@@ -117,7 +117,7 @@ def _serialize_subroutine_to_braket(subroutine) -> str:
 
         if node.tag == "subroutine":
             name = node.attributes.get("name") or subroutine.name
-            bra = f"{pad}<{name}|"
+            bra = f"{pad}<{name}"
             extras = []
             for key, value in node.attributes.items():
                 if key == "name" or value is None:
@@ -129,6 +129,7 @@ def _serialize_subroutine_to_braket(subroutine) -> str:
                     extras.append(f"{key}={value_str}")
             if extras:
                 bra += " " + " ".join(extras)
+            bra += "|"
             lines.append(bra)
             for child in node.children:
                 render(child, indent + 1)

@@ -238,6 +238,19 @@ class TestCoreRuntime(unittest.TestCase):
             integrate(session, element)
             self.assertEqual([s.name for s in session.subroutines if s.name == "demo"], ["demo"])
 
+    def test_parameters_select_star_executes_call_children(self):
+        src = '''
+<dirac>
+  <subroutine name="echo-children">
+    <parameters select="*" />
+  </subroutine>
+  <echo-children>
+    <output>Hello from child content</output>
+  </echo-children>
+</dirac>
+'''
+        self.assertEqual(normalize(execute(src)), "Hello from child content")
+
     def test_llm_tag_calls_custom_provider_and_emits_response(self):
         class FakeHTTPResponse:
             def __init__(self, payload):
@@ -421,6 +434,34 @@ class TestCoreRuntime(unittest.TestCase):
         self.assertIn("Updated subroutine 'demo' in session", buf.getvalue())
         self.assertEqual([s.name for s in session.subroutines if s.name == "demo"], ["demo"])
         self.assertEqual(shell._find_subroutine(session, "demo").name, "demo")
+
+    def test_shell_edit_round_trip_keeps_valid_bra_ket(self):
+        from dirac import shell
+
+        session = shell.create_session()
+        src = """
+<dirac>
+  <subroutine name="demo" visible="subroutine" param-name="string">
+    <output>Hello</output>
+  </subroutine>
+</dirac>
+"""
+        parser = shell.DiracParser()
+        ast = parser.parse(src)
+        shell.integrate(session, ast)
+
+        subroutine = shell._find_subroutine(session, "demo")
+        serialized = shell._serialize_subroutine_to_braket(subroutine)
+
+        self.assertIn('<demo', serialized.splitlines()[0])
+        self.assertIn('visible=subroutine', serialized)
+        self.assertIn('param-name=string', serialized)
+        self.assertTrue(serialized.splitlines()[0].endswith('|'))
+
+        xml = shell.BraKetParser().parse(serialized)
+        reparsed = shell.DiracParser().parse(xml)
+        self.assertIsNotNone(reparsed)
+        self.assertNotIn('&lt;demo', xml)
 
     def test_shell_mode_persists_cd_state(self):
         start = os.getcwd()
