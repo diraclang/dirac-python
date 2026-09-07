@@ -11,6 +11,7 @@ Usage:
 
 import os
 import subprocess
+import tempfile
 
 from .runtime.braket_parser import BraKetParser
 from .runtime.interpreter import integrate
@@ -29,6 +30,8 @@ HELP = """Commands:
   :debug   Toggle debug logging
   :braket  Toggle bra-ket notation mode (default: XML)
   :shell   Toggle shell mode for running Unix commands directly
+  :edit <name>   Open a subroutine in your editor ($EDITOR or vi)
+  :save <name> [path]  Save a subroutine to disk
   :help    Show this help
   :quit    Exit the shell (also :exit)
 
@@ -58,6 +61,137 @@ In :braket mode, the same example is:
 """
 
 
+def _serialize_subroutine_to_braket(subroutine) -> str:
+    """Serialize a registered subroutine in bra-ket notation for editor use."""
+    element = subroutine.element
+    lines: list[str] = []
+
+    def render(node, indent=0):
+        pad = "  " * indent
+
+        if not node.tag:
+            if not node.text:
+                return
+            text = node.text.strip()
+            if text:
+                lines.append(f"{pad}{text}")
+            return
+
+        if node.tag == "subroutine":
+            name = node.attributes.get("name") or subroutine.name
+            bra = f"{pad}<{name}|"
+            extras = []
+            for key, value in node.attributes.items():
+                if key == "name" or value is None:
+                    continue
+                value_str = str(value)
+                if any(ch.isspace() for ch in value_str) or "=" in value_str:
+                    extras.append(f"{key}=\"{value_str}\"")
+                else:
+                    extras.append(f"{key}={value_str}")
+            if extras:
+                bra += " " + " ".join(extras)
+            lines.append(bra)
+            for child in node.children:
+                render(child, indent + 1)
+            return
+
+        ket = f"{pad}|{node.tag}"
+        extras = []
+        for key, value in node.attributes.items():
+            if value is None:
+                continue
+            value_str = str(value)
+            if any(ch.isspace() for ch in value_str) or "=" in value_str:
+                extras.append(f"{key}=\"{value_str}\"")
+            else:
+                extras.append(f"{key}={value_str}")
+        if extras:
+            ket += " " + " ".join(extras)
+        ket += ">"
+
+        if node.children:
+            lines.append(ket)
+            for child in node.children:
+                render(child, indent + 1)
+            return
+
+        lines.append(ket)
+
+    render(element)
+    return "\n".join(lines)
+
+
+def _find_subroutine(session, name: str):
+    for sub in reversed(session.subroutines):
+        if sub.name == name:
+            return sub
+    return None
+
+
+def _ensure_parent_dir(path: str) -> None:
+    directory = os.path.dirname(path)
+    if directory and not os.path.exists(directory):
+        os.makedirs(directory, exist_ok=True)
+
+
+def _edit_subroutine_in_editor(session, parser, name: str) -> None:
+    subroutine = _find_subroutine(session, name)
+    if subroutine is None:
+        print(f"Subroutine '{name}' not found in session")
+        return
+
+    edited = _serialize_subroutine_to_braket(subroutine)
+    editor = os.environ.get("EDITOR") or "vi"
+
+    with tempfile.NamedTemporaryFile("w", suffix=".di", delete=False) as handle:
+        handle.write(edited)
+        temp_path = handle.name
+
+    try:
+        print(f"Opening '{name}' in {editor} ...")
+        result = subprocess.run([editor, temp_path], check=False)
+        if result.returncode != 0:
+            print(f"Editor exited with code {result.returncode}")
+            return
+
+        with open(temp_path, "r", encoding="utf-8") as handle:
+            new_source = handle.read()
+
+        if not new_source.strip():
+            print("No changes saved")
+            return
+
+        session.subroutines = [s for s in session.subroutines if s.name != name]
+        try:
+            ast = parser.parse(new_source)
+        except Exception:
+            xml_source = BraKetParser().parse(new_source)
+            ast = parser.parse(xml_source)
+        integrate(session, ast)
+        print(f"Updated subroutine '{name}' in session")
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def _save_subroutine_to_disk(session, parser, name: str, path: str | None = None) -> None:
+    subroutine = _find_subroutine(session, name)
+    if subroutine is None:
+        print(f"Subroutine '{name}' not found in session")
+        return
+
+    if not path:
+        base = os.path.expanduser("~/.dirac/lib")
+        path = os.path.join(base, f"{name}.di")
+
+    _ensure_parent_dir(path)
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(_serialize_subroutine_to_braket(subroutine))
+
+    print(f"Saved subroutine '{name}' to {path}")
+
+
 def run_shell_command(command: str) -> int:
     """Run a shell command in the current working directory and keep `cd` state."""
     stripped = command.strip()
@@ -82,7 +216,7 @@ def run() -> None:
     session = create_session()
     parser = DiracParser()
     braket_parser = BraKetParser()
-    braket_mode = False
+    braket_mode = True
     shell_mode = False
 
     print(BANNER)
@@ -105,6 +239,22 @@ def run() -> None:
                     return
                 if not lines and stripped == ":help":
                     print(HELP)
+                    break
+                if not lines and stripped.startswith(":edit"):
+                    parts = stripped.split(maxsplit=1)
+                    if len(parts) < 2:
+                        print("Usage: :edit <subroutine-name>")
+                    else:
+                        _edit_subroutine_in_editor(session, parser, parts[1].strip())
+                    break
+                if not lines and stripped.startswith(":save"):
+                    parts = stripped.split(maxsplit=2)
+                    if len(parts) < 2:
+                        print("Usage: :save <subroutine-name> [path]")
+                    else:
+                        target = parts[1].strip()
+                        out_path = parts[2].strip() if len(parts) > 2 else None
+                        _save_subroutine_to_disk(session, parser, target, out_path)
                     break
                 if not lines and stripped == ":vars":
                     if hasattr(session, "variables"):

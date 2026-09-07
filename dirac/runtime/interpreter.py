@@ -12,6 +12,7 @@ from ..tags.defvar import execute_defvar
 from ..tags.eval_tag import execute_eval
 from ..tags.foreach import execute_foreach
 from ..tags.if_tag import execute_if
+from ..tags.import_tag import execute_import
 from ..tags.input_tag import execute_input
 from ..tags.loop import execute_loop
 from ..tags.output import execute_output
@@ -42,6 +43,7 @@ _BUILTIN_TAGS = {
     "system",
     "input",
     "return",
+    "import",
 }
 
 
@@ -105,6 +107,9 @@ def integrate(session: DiracSession, element: DiracElement) -> None:
         return
     if tag == "return":
         execute_return(session, element)
+        return
+    if tag == "import":
+        execute_import(session, element)
         return
 
     # Not a built-in tag - treat as a direct subroutine call, e.g. <greet name="Alice" />

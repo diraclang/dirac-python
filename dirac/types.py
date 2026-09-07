@@ -78,5 +78,7 @@ class DiracSession:
     # Debugging
     debug: bool = False
 
-    # Current file (for relative import resolution; not yet used)
+    # Import tracking / file context
     current_file: Optional[str] = None
+    imported_files: set = field(default_factory=set)
+    library_paths: list = field(default_factory=list)

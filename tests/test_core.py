@@ -214,6 +214,28 @@ class TestCoreRuntime(unittest.TestCase):
 """
         self.assertEqual(normalize(execute(src)), "42")
 
+    def test_import_tag_loads_subroutine_from_disk(self):
+        import tempfile
+
+        from dirac.runtime.interpreter import integrate
+        from dirac.runtime.session import create_session
+        from dirac.types import DiracElement
+
+        session = create_session()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lib_path = os.path.join(tmpdir, "demo.di")
+            with open(lib_path, "w", encoding="utf-8") as handle:
+                handle.write('<subroutine name="demo"><output>Hello from import</output></subroutine>')
+
+            src = f'<dirac><import src="{lib_path}" /><demo /></dirac>'
+            self.assertEqual(normalize(execute(src)), "Hello from import")
+
+            session.current_file = os.path.join(tmpdir, "main.di")
+            session.library_paths = [tmpdir]
+            element = DiracElement(tag="import", attributes={"src": "demo.di"})
+            integrate(session, element)
+            self.assertEqual([s.name for s in session.subroutines if s.name == "demo"], ["demo"])
+
     def test_system_basic(self):
         src = "<dirac><system>echo hello</system></dirac>"
         self.assertEqual(normalize(execute(src)), "hello")
@@ -221,6 +243,20 @@ class TestCoreRuntime(unittest.TestCase):
     def test_run_shell_command_returns_zero_for_plain_echo(self):
         rc = run_shell_command("printf 'hello from shell\\n'")
         self.assertEqual(rc, 0)
+
+    def test_shell_starts_in_braket_mode_by_default(self):
+        from dirac import shell
+
+        captured = []
+
+        def fake_input(prompt):
+            captured.append(prompt)
+            return ":quit"
+
+        with patch("builtins.input", side_effect=fake_input):
+            shell.run()
+
+        self.assertIn("braket> ", captured[0])
 
     def test_shell_mode_runs_plain_unix_commands(self):
         from dirac import shell
@@ -234,6 +270,44 @@ class TestCoreRuntime(unittest.TestCase):
         self.assertIn("DIRAC Python Shell", text)
         self.assertIn("shell mode = True", text)
         self.assertIn("Returned to DIRAC shell", text)
+
+    def test_shell_save_and_edit_subroutine(self):
+        from dirac import shell
+
+        session = shell.create_session()
+        src = """
+<dirac>
+  <subroutine name="demo">
+    <output>Hello</output>
+  </subroutine>
+</dirac>
+"""
+        parser = shell.DiracParser()
+        ast = parser.parse(src)
+        shell.integrate(session, ast)
+
+        temp = os.path.join(os.getcwd(), "demo-shell-save.di")
+        try:
+            shell._save_subroutine_to_disk(session, None, "demo", temp)
+            self.assertTrue(os.path.exists(temp))
+            with open(temp, "r", encoding="utf-8") as handle:
+                text = handle.read()
+            self.assertIn("<demo|", text)
+            self.assertNotIn("<demo|>", text)
+        finally:
+            if os.path.exists(temp):
+                os.unlink(temp)
+
+        edited_source = "<demo|\n  |output>Hello again"
+        buf = io.StringIO()
+        with patch("dirac.shell.subprocess.run") as mock_run, patch("builtins.open", create=True) as mock_open, redirect_stdout(buf):
+            mock_run.return_value.returncode = 0
+            mock_open.return_value.__enter__.return_value.read.return_value = edited_source
+            shell._edit_subroutine_in_editor(session, parser, "demo")
+
+        self.assertIn("Updated subroutine 'demo' in session", buf.getvalue())
+        self.assertEqual([s.name for s in session.subroutines if s.name == "demo"], ["demo"])
+        self.assertEqual(shell._find_subroutine(session, "demo").name, "demo")
 
     def test_shell_mode_persists_cd_state(self):
         start = os.getcwd()
