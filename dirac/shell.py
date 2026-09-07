@@ -10,8 +10,14 @@ Usage:
 """
 
 import os
+import shlex
 import subprocess
 import tempfile
+
+try:
+    import readline
+except ImportError:  # pragma: no cover - platform-specific fallback
+    readline = None
 
 from .runtime.braket_parser import BraKetParser
 from .runtime.interpreter import integrate
@@ -23,6 +29,38 @@ BANNER = """DIRAC Python Shell
 Type DIRAC XML, then press Enter on a blank line to execute it.
 Commands: :vars  :subs  :debug  :braket  :shell  :help  :quit
 """
+
+HISTORY_FILE = os.path.join(os.path.expanduser("~"), ".dirac_history")
+MAX_HISTORY = 1000
+
+
+def _configure_readline_history() -> None:
+    """Enable readline history so up/down arrows recall prior shell commands."""
+    if readline is None:
+        return
+    try:
+        readline.set_history_length(MAX_HISTORY)
+        if os.path.exists(HISTORY_FILE):
+            readline.read_history_file(HISTORY_FILE)
+    except Exception:
+        pass
+
+
+def _save_readline_history() -> None:
+    """Persist command history for the next shell session."""
+    if readline is None:
+        return
+    try:
+        readline.write_history_file(HISTORY_FILE)
+    except Exception:
+        pass
+
+COMMON_UNIX_COMMANDS = {
+    "ls", "pwd", "cd", "echo", "cat", "head", "tail", "wc", "mkdir", "rmdir",
+    "touch", "rm", "cp", "mv", "find", "grep", "ps", "whoami", "date", "uname",
+    "which", "clear", "env", "printenv", "vi", "vim", "nvim", "python", "python3",
+    "node", "npm", "yarn", "pnpm", "git", "curl", "wget", "ssh", "scp", "lsb_release",
+}
 
 HELP = """Commands:
   :vars    List current variables
@@ -192,6 +230,22 @@ def _save_subroutine_to_disk(session, parser, name: str, path: str | None = None
     print(f"Saved subroutine '{name}' to {path}")
 
 
+def _is_bare_unix_command(line: str) -> bool:
+    """Detect a bare shell command in bra-ket mode using a safe allowlist."""
+    stripped = line.strip()
+    if not stripped or stripped.startswith(":") or stripped.startswith("|") or stripped.startswith("<"):
+        return False
+    if any(ch in stripped for ch in ("<", ">", "{", "}", "=", "&")):
+        return False
+    try:
+        argv = shlex.split(stripped)
+    except ValueError:
+        return False
+    if not argv:
+        return False
+    return argv[0] in COMMON_UNIX_COMMANDS
+
+
 def run_shell_command(command: str) -> int:
     """Run a shell command in the current working directory and keep `cd` state."""
     stripped = command.strip()
@@ -213,6 +267,7 @@ def run_shell_command(command: str) -> int:
 
 
 def run() -> None:
+    _configure_readline_history()
     session = create_session()
     parser = DiracParser()
     braket_parser = BraKetParser()
@@ -315,6 +370,11 @@ def run() -> None:
                     if rc != 0:
                         print(f"shell exit code: {rc}")
                     break
+                if braket_mode and _is_bare_unix_command(stripped):
+                    rc = run_shell_command(stripped)
+                    if rc != 0:
+                        print(f"shell exit code: {rc}")
+                    break
                 if stripped == "" and not lines:
                     break
                 if stripped == "" and lines:
@@ -332,6 +392,7 @@ def run() -> None:
         if not lines:
             continue
 
+        _save_readline_history()
         source = "\n".join(lines)
         before = len(session.output)
 

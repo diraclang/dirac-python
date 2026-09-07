@@ -350,6 +350,15 @@ class TestCoreRuntime(unittest.TestCase):
 
         self.assertIn("braket> ", captured[0])
 
+    def test_shell_enables_readline_history_for_arrow_key_recall(self):
+        from dirac import shell
+
+        with patch("dirac.shell.readline") as mock_readline:
+            shell._configure_readline_history()
+
+        mock_readline.set_history_length.assert_called_with(1000)
+        mock_readline.read_history_file.assert_called_once_with(shell.HISTORY_FILE)
+
     def test_shell_mode_runs_plain_unix_commands(self):
         from dirac import shell
 
