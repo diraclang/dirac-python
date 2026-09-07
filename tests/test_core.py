@@ -409,6 +409,20 @@ class TestCoreRuntime(unittest.TestCase):
         mock_readline.set_history_length.assert_called_with(1000)
         mock_readline.read_history_file.assert_called_once_with(shell.HISTORY_FILE)
 
+    def test_shell_enables_tab_completion_for_cd_paths(self):
+        from dirac import shell
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target_dir = os.path.join(tmpdir, "demo-dir")
+            os.mkdir(target_dir)
+
+            with patch("dirac.shell.readline") as mock_readline:
+                shell._configure_readline_completion()
+                completer = mock_readline.set_completer.call_args[0][0]
+
+            result = completer(f"cd {tmpdir}/de", 0)
+            self.assertTrue(result.startswith(f"{tmpdir}/demo-dir"))
+
     def test_shell_runs_init_script_on_startup(self):
         from dirac import shell
 

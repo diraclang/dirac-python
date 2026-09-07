@@ -9,6 +9,7 @@ Usage:
     python3 -m dirac.shell
 """
 
+import fnmatch
 import os
 import re
 import shlex
@@ -53,6 +54,72 @@ def _save_readline_history() -> None:
         return
     try:
         readline.write_history_file(HISTORY_FILE)
+    except Exception:
+        pass
+
+
+def _complete_path_token(prefix: str) -> list[str]:
+    """Return possible file/directory matches for a shell path prefix."""
+    if not prefix:
+        return []
+
+    expanded = os.path.expanduser(prefix)
+    head, tail = os.path.split(expanded)
+    if not head:
+        search_dir = os.getcwd()
+        search_prefix = tail or ""
+    else:
+        search_dir = head if os.path.isdir(head) else os.getcwd()
+        search_prefix = tail or ""
+
+    try:
+        entries = sorted(os.listdir(search_dir))
+    except OSError:
+        return []
+
+    matches: list[str] = []
+    for name in entries:
+        if not fnmatch.fnmatch(name, f"{search_prefix}*"):
+            continue
+        candidate = os.path.join(search_dir, name)
+        display = candidate if prefix.startswith("~") or prefix.startswith("/") else name
+        if os.path.isdir(candidate):
+            display = candidate + os.sep
+        matches.append(display)
+
+    # Preserve the typed prefix style when a relative path is being completed.
+    if prefix.startswith("./") or prefix.startswith("../") or prefix.startswith("~/"):
+        return matches
+
+    if not os.path.dirname(prefix):
+        return matches
+
+    return matches
+
+
+def _readline_completer(text: str, state: int) -> str | None:
+    """Provide shell-like path completion for readline in the interactive shell."""
+    if not text:
+        return None
+
+    token = text.rsplit(None, 1)[-1] if " " in text else text
+    matches = _complete_path_token(token)
+    if not matches:
+        return None
+    if state < len(matches):
+        return matches[state]
+    return None
+
+
+def _configure_readline_completion() -> None:
+    """Enable tab completion for file and directory names in shell mode."""
+    if readline is None:
+        return
+    try:
+        readline.set_completer(_readline_completer)
+        readline.set_completer_delims(" \t\n=/")
+        readline.parse_and_bind("tab: complete")
+        readline.parse_and_bind("bind ^I rl_complete")
     except Exception:
         pass
 
@@ -362,6 +429,7 @@ def run_shell_command(command: str) -> int:
 
 def run() -> None:
     _configure_readline_history()
+    _configure_readline_completion()
     session = create_session()
     parser = DiracParser()
     braket_parser = BraKetParser()
