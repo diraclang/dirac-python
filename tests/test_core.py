@@ -8,14 +8,19 @@ Run with:
     python -m unittest discover -s tests
 """
 
+import io
+import os
 import re
 import sys
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from dirac import execute  # noqa: E402
+from dirac.shell import run_shell_command  # noqa: E402
 
 _WHITESPACE_RE = re.compile(r"\s+")
 
@@ -200,6 +205,32 @@ class TestCoreRuntime(unittest.TestCase):
     def test_system_basic(self):
         src = "<dirac><system>echo hello</system></dirac>"
         self.assertEqual(normalize(execute(src)), "hello")
+
+    def test_run_shell_command_returns_zero_for_plain_echo(self):
+        rc = run_shell_command("printf 'hello from shell\\n'")
+        self.assertEqual(rc, 0)
+
+    def test_shell_mode_runs_plain_unix_commands(self):
+        from dirac import shell
+
+        with patch("builtins.input", side_effect=[":shell", ":return", ":quit"]):
+            out = io.StringIO()
+            with redirect_stdout(out):
+                shell.run()
+
+        text = out.getvalue()
+        self.assertIn("DIRAC Python Shell", text)
+        self.assertIn("shell mode = True", text)
+        self.assertIn("Returned to DIRAC shell", text)
+
+    def test_shell_mode_persists_cd_state(self):
+        start = os.getcwd()
+        try:
+            self.assertEqual(run_shell_command("cd .."), 0)
+            self.assertNotEqual(os.getcwd(), start)
+            self.assertEqual(run_shell_command("cd " + start), 0)
+        finally:
+            os.chdir(start)
 
 
 if __name__ == "__main__":
