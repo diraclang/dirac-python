@@ -300,3 +300,5 @@ Same as parent project: [License TBD - check main repo]
 ---
 
 **Ready to contribute?** Fork this repo and start with the core parser! The Node.js implementation took ~6 months to reach v0.1.32 with 57 tests. Let's see how fast we can achieve parity in Python.
+
+<!-- python push probe: 2026-09-07T19:52:22Z -->
