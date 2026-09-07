@@ -385,6 +385,16 @@ class TestCoreRuntime(unittest.TestCase):
         self.assertIn("shell mode = True", text)
         self.assertIn("Returned to DIRAC shell", text)
 
+    def test_shell_question_mark_and_natural_language_fallback_to_ai(self):
+        from dirac import shell
+
+        session = shell.create_session()
+        self.assertEqual(shell._normalize_question_mark_input("? explain recursion", session.question_mark_target), "|ai>explain recursion")
+        self.assertTrue(shell._is_likely_natural_language("what is the best way to sort a list?"))
+        self.assertTrue(shell._is_likely_natural_language("? explain recursion"))
+        self.assertFalse(shell._is_likely_natural_language("ls -la"))
+        self.assertTrue(shell._should_fallback_to_ai(session, "what is the best way to sort a list?"))
+
     def test_shell_autoruns_common_unix_commands_in_braket_mode(self):
         from dirac import shell
 

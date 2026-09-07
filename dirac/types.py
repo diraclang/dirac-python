@@ -47,6 +47,12 @@ class Subroutine:
 class DiracSession:
     """Execution context. Mirrors DiracSession from src/types/index.ts."""
 
+    llm_client: Any = None
+    llm_provider: Optional[str] = None
+    llm_model: Optional[str] = None
+    custom_llm_url: Optional[str] = None
+    question_mark_target: str = "ai"
+
     # Variable stack (all variables live on one flat stack)
     variables: list = field(default_factory=list)  # list[Variable]
 

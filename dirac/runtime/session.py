@@ -3,16 +3,66 @@ Session management for the DIRAC Python runtime.
 Mirrors dirac/src/runtime/session.ts from the Node.js reference implementation.
 """
 
+import os
 import re
 from typing import Any, Optional
+
+import yaml
 
 from ..types import DiracElement, DiracSession, Subroutine, Variable
 
 # --- Session lifecycle -------------------------------------------------
 
 
+def _load_config_defaults() -> tuple[Optional[str], Optional[str], Optional[str], str]:
+    provider = os.environ.get("LLM_PROVIDER") or None
+    model = os.environ.get("LLM_MODEL") or os.environ.get("DEFAULT_MODEL") or None
+    custom_url = os.environ.get("CUSTOM_LLM_URL") or os.environ.get("CUSTM_LLM_URL") or None
+    question_target = "ai"
+
+    current = os.path.abspath(os.getcwd())
+    seen = set()
+    candidates = []
+    cursor = current
+    while True:
+        candidates.append(os.path.join(cursor, "config.yml"))
+        if os.path.basename(cursor) != "dirac":
+            candidates.append(os.path.join(cursor, "dirac", "config.yml"))
+        parent = os.path.dirname(cursor)
+        if parent == cursor:
+            break
+        cursor = parent
+
+    candidates.append(os.path.expanduser("~/.dirac/config.yml"))
+    for config_path in candidates:
+        if config_path in seen or not os.path.exists(config_path):
+            continue
+        seen.add(config_path)
+        try:
+            with open(config_path, "r", encoding="utf-8") as handle:
+                data = yaml.safe_load(handle) or {}
+        except Exception:
+            continue
+
+        provider = provider or data.get("llmProvider")
+        model = model or data.get("llmModel") or data.get("llm_model")
+        custom_url = custom_url or data.get("customLLMUrl") or data.get("custom_llm_url")
+        question_target = data.get("questionMarkTarget") or data.get("question_mark_target") or question_target
+        break
+
+    return provider, model, custom_url or "http://localhost:5001", question_target
+
+
 def create_session(debug: bool = False) -> DiracSession:
-    return DiracSession(debug=debug)
+    provider, model, custom_url, question_target = _load_config_defaults()
+    session = DiracSession(
+        debug=debug,
+        llm_provider=provider,
+        llm_model=model,
+        custom_llm_url=custom_url,
+        question_mark_target=question_target,
+    )
+    return session
 
 
 # --- Variable management (maps to var_info functions in MASK) ----------

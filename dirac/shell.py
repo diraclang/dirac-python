@@ -10,6 +10,7 @@ Usage:
 """
 
 import os
+import re
 import shlex
 import subprocess
 import tempfile
@@ -231,6 +232,49 @@ def _save_subroutine_to_disk(session, parser, name: str, path: str | None = None
     print(f"Saved subroutine '{name}' to {path}")
 
 
+def _normalize_question_mark_input(value: str, target: str | None = None) -> str:
+    """Map ? shorthand to a configurable ket tag like |ai>prompt or |helper>prompt."""
+    trimmed = value.strip()
+    if not trimmed.startswith("?"):
+        return value
+    rest = trimmed[1:].strip()
+    target_name = (target or "ai").strip() or "ai"
+    return f"|{target_name}>{rest}" if rest else f"|{target_name}>"
+
+
+def _is_likely_natural_language(line: str) -> bool:
+    """Heuristic for natural-language prompts in braket mode."""
+    stripped = line.strip()
+    if not stripped or stripped.startswith(":") or stripped.startswith("|") or stripped.startswith("<"):
+        return False
+    if stripped.startswith("?"):
+        return True
+    lowered = stripped.lower()
+    if lowered.endswith("?"):
+        return True
+    starters = (
+        "what", "why", "how", "where", "when", "which", "who", "can", "could",
+        "would", "should", "please", "may", "might", "do", "does", "did",
+        "is", "are", "was", "were", "will", "shall", "tell", "explain",
+        "summarize", "show", "list", "find", "generate", "write", "create",
+        "debug", "help",
+    )
+    return bool(re.match(rf"^(?:{'|'.join(starters)})\b", lowered))
+
+
+def _should_fallback_to_ai(session: DiracSession, line: str) -> bool:
+    """Return True when a braket-shell prompt should turn into a configured AI tag."""
+    stripped = line.strip()
+    if not stripped or stripped.startswith(":") or stripped.startswith("|") or stripped.startswith("<"):
+        return False
+    if _is_bare_unix_command(stripped):
+        return False
+    target = getattr(session, "question_mark_target", "ai") or "ai"
+    if stripped.startswith("?"):
+        return True
+    return _is_likely_natural_language(stripped) and not any(ch in stripped for ch in ("<", ">", "=", "&"))
+
+
 def _is_bare_unix_command(line: str) -> bool:
     """Detect a bare shell command in bra-ket mode using a safe allowlist."""
     stripped = line.strip()
@@ -375,6 +419,9 @@ def run() -> None:
                     rc = run_shell_command(stripped)
                     if rc != 0:
                         print(f"shell exit code: {rc}")
+                    break
+                if braket_mode and _should_fallback_to_ai(session, stripped):
+                    lines.append(_normalize_question_mark_input(stripped, getattr(session, "question_mark_target", "ai")))
                     break
                 if stripped == "" and not lines:
                     break
