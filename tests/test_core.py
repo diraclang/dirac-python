@@ -9,9 +9,11 @@ Run with:
 """
 
 import io
+import json
 import os
 import re
 import sys
+import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -236,6 +238,96 @@ class TestCoreRuntime(unittest.TestCase):
             integrate(session, element)
             self.assertEqual([s.name for s in session.subroutines if s.name == "demo"], ["demo"])
 
+    def test_llm_tag_calls_custom_provider_and_emits_response(self):
+        class FakeHTTPResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps(self.payload).encode("utf-8")
+
+            def __iter__(self):
+                return iter([json.dumps(self.payload).encode("utf-8")])
+
+        with patch("dirac.tags.llm_tag.request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value = FakeHTTPResponse({"response": "Hello from custom LLM"})
+            src = '<dirac><llm provider="custom" model="demo">Say hello</llm></dirac>'
+            self.assertEqual(normalize(execute(src)), "Hello from custom LLM")
+
+    def test_llm_tag_adds_router_subroutine_as_system_prompt(self):
+        class FakeHTTPResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps(self.payload).encode("utf-8")
+
+        with patch("dirac.tags.llm_tag.request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value = FakeHTTPResponse({"response": "Hello from routered LLM"})
+            src = '''
+<dirac>
+  <subroutine name="simple-router" visible="subroutine">
+    <output>You are a helpful router.</output>
+  </subroutine>
+  <llm provider="custom" model="demo" router="simple-router">Say hello</llm>
+</dirac>
+'''
+            output = execute(src)
+            self.assertEqual(normalize(output), "Hello from routered LLM")
+            request_obj = mock_urlopen.call_args[0][0]
+            payload = json.loads(request_obj.data.decode("utf-8"))
+            self.assertEqual(payload["messages"][0]["role"], "system")
+            self.assertEqual(payload["messages"][0]["content"], "You are a helpful router.")
+            self.assertEqual(payload["messages"][1]["role"], "user")
+            self.assertIn("Say hello", payload["messages"][1]["content"])
+
+    def test_create_session_loads_custom_llm_config_from_config_yaml(self):
+        from dirac.runtime.session import create_session
+
+        prev_cwd = os.getcwd()
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                config_path = os.path.join(tmpdir, "config.yml")
+                with open(config_path, "w", encoding="utf-8") as handle:
+                    handle.write("llmProvider: custom\ncustomLLMUrl: http://localhost:5001\n")
+
+                os.chdir(tmpdir)
+                session = create_session()
+                self.assertEqual(session.llm_provider, "custom")
+                self.assertEqual(session.custom_llm_url, "http://localhost:5001")
+        finally:
+            os.chdir(prev_cwd)
+
+    def test_llm_execute_with_feedback_stops_on_plain_text_response(self):
+        class FakeHTTPResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps({"response": "This is analysis text without XML."}).encode("utf-8")
+
+        with patch("dirac.tags.llm_tag.request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value = FakeHTTPResponse()
+            src = '<dirac><llm execute="true" feedback="true">Explain what this script should do</llm></dirac>'
+            output = execute(src)
+            self.assertIn("This is analysis text without XML.", output)
+            self.assertEqual(mock_urlopen.call_count, 1)
+
     def test_system_basic(self):
         src = "<dirac><system>echo hello</system></dirac>"
         self.assertEqual(normalize(execute(src)), "hello")
@@ -270,6 +362,18 @@ class TestCoreRuntime(unittest.TestCase):
         self.assertIn("DIRAC Python Shell", text)
         self.assertIn("shell mode = True", text)
         self.assertIn("Returned to DIRAC shell", text)
+
+    def test_shell_autoruns_common_unix_commands_in_braket_mode(self):
+        from dirac import shell
+
+        with patch("builtins.input", side_effect=["ls", ":quit"]), patch("dirac.shell.run_shell_command", return_value=0) as mock_run:
+            out = io.StringIO()
+            with redirect_stdout(out):
+                shell.run()
+
+        self.assertTrue(mock_run.called)
+        self.assertEqual(mock_run.call_args[0][0], "ls")
+        self.assertIn("DIRAC Python Shell", out.getvalue())
 
     def test_shell_save_and_edit_subroutine(self):
         from dirac import shell

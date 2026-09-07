@@ -16,7 +16,7 @@ from typing import Any
 from urllib import request, error
 
 from ..runtime.parser import DiracParser
-from ..runtime.session import emit, get_variable, set_variable, substitute_attribute
+from ..runtime.session import emit, get_subroutine, get_variable, set_variable, substitute_attribute
 from ..types import DiracElement, DiracSession
 
 _XML_TAG_RE = re.compile(r"<\s*/?\s*[a-zA-Z_][\w:.-]*(?:\s[^<>]*?)?/?>")
@@ -166,12 +166,25 @@ def execute_llm(session: DiracSession, element: DiracElement) -> None:
     else:
         history = []
 
-    if append_this and dialog_var:
-        history.append({"role": "user", "content": prompt})
-    elif append_this and not dialog_var:
-        history = [{"role": "user", "content": prompt}]
+    router_name = element.attributes.get("router")
+    router_prompt = ""
+    if router_name:
+        router_subroutine = get_subroutine(session, router_name)
+        if router_subroutine:
+            before_output = len(session.output)
+            from ..tags.call import execute_call
 
-    messages = history if history else [{"role": "user", "content": prompt}]
+            execute_call(session, DiracElement(tag=router_name, attributes={}, children=[]))
+            router_output = "".join(session.output[before_output:]).strip()
+            del session.output[before_output:]
+            router_prompt = router_output
+
+    request_messages = list(history)
+    if router_prompt:
+        request_messages.append({"role": "system", "content": router_prompt})
+    request_messages.append({"role": "user", "content": prompt})
+
+    messages = request_messages
     response = client.complete(prompt, model=model or "", messages=messages)
     result = _strip_code_fence(response)
 
