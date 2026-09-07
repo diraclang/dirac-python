@@ -38,6 +38,7 @@ _BUILTIN_TAGS = {
     "if",
     "test-if",
     "eval",
+    "python",
     "system",
     "input",
     "return",
@@ -93,7 +94,7 @@ def integrate(session: DiracSession, element: DiracElement) -> None:
     if tag == "test-if":
         execute_test_if(session, element)
         return
-    if tag == "eval":
+    if tag in ("eval", "python"):
         execute_eval(session, element)
         return
     if tag == "system":

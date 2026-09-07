@@ -202,6 +202,18 @@ class TestCoreRuntime(unittest.TestCase):
             "Calling NESTED_HELPER: Success!",
         )
 
+    def test_python_alias_executes_like_eval(self):
+        src = """
+<dirac>
+  <python result="value">
+    value = 21
+    return value * 2
+  </python>
+  <output><variable name="value" /></output>
+</dirac>
+"""
+        self.assertEqual(normalize(execute(src)), "42")
+
     def test_system_basic(self):
         src = "<dirac><system>echo hello</system></dirac>"
         self.assertEqual(normalize(execute(src)), "hello")
