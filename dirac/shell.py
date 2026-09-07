@@ -56,6 +56,42 @@ def _save_readline_history() -> None:
     except Exception:
         pass
 
+
+def _load_source(session: DiracSession, parser: DiracParser, braket_parser: BraKetParser, source: str) -> str:
+    """Parse and execute a DIRAC source string, returning any emitted output."""
+    before = len(session.output)
+    try:
+        ast = parser.parse(source)
+    except Exception:
+        ast = parser.parse(braket_parser.parse(source))
+    integrate(session, ast)
+    return "".join(session.output[before:]).strip()
+
+
+def _find_shell_init_script() -> str | None:
+    """Return the project-local init script first, then user and packaged fallbacks."""
+    package_root = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.dirname(package_root)
+    parent_root = os.path.dirname(repo_root)
+
+    candidates: list[str] = []
+    candidates.append(os.path.join(repo_root, "shell-init.di"))
+
+    home_dir = os.path.expanduser("~")
+    user_dir = os.path.join(home_dir, ".dirac")
+    candidates.append(os.path.join(user_dir, "shell-init.di"))
+    candidates.append(os.path.join(parent_root, "dirac", "lib", "shell-init.di"))
+    candidates.append(os.path.join(repo_root, "lib", "shell-init.di"))
+    candidates.append(os.path.join(package_root, "../lib/shell-init.di"))
+    candidates.append(os.path.join(package_root, "lib/shell-init.di"))
+
+    for candidate in candidates:
+        resolved = os.path.abspath(os.path.expanduser(candidate))
+        if os.path.exists(resolved):
+            return resolved
+    return None
+
+
 COMMON_UNIX_COMMANDS = {
     "ls", "pwd", "cd", "echo", "cat", "head", "tail", "wc", "mkdir", "rmdir",
     "touch", "rm", "cp", "mv", "find", "grep", "ps", "whoami", "date", "uname",
@@ -291,12 +327,24 @@ def _is_bare_unix_command(line: str) -> bool:
     return argv[0] in COMMON_UNIX_COMMANDS
 
 
+def _expand_user_home_in_command(command: str) -> str:
+    """Expand '~' in shell commands to the user home directory."""
+    if "~" not in command:
+        return command
+
+    def replace_home(match: re.Match[str]) -> str:
+        return os.path.expanduser(match.group(0))
+
+    return re.sub(r"(?<![A-Za-z0-9_])~(?=/|$|\s)", lambda _: os.path.expanduser("~"), command)
+
+
 def run_shell_command(command: str) -> int:
     """Run a shell command in the current working directory and keep `cd` state."""
     stripped = command.strip()
     if stripped.startswith("cd"):
         rest = stripped[2:].strip()
         target = rest or os.path.expanduser("~")
+        target = os.path.expanduser(target)
         try:
             os.chdir(target)
             return 0
@@ -304,8 +352,9 @@ def run_shell_command(command: str) -> int:
             print(f"cd: {exc}")
             return 1
 
+    expanded_command = _expand_user_home_in_command(command)
     try:
-        completed = subprocess.run(command, shell=True, capture_output=False, text=True)
+        completed = subprocess.run(expanded_command, shell=True, capture_output=False, text=True)
         return completed.returncode
     except KeyboardInterrupt:
         return 130
@@ -318,6 +367,36 @@ def run() -> None:
     braket_parser = BraKetParser()
     braket_mode = True
     shell_mode = False
+
+    init_script = _find_shell_init_script()
+    if init_script:
+        try:
+            with open(init_script, "r", encoding="utf-8") as handle:
+                init_source = handle.read()
+            if init_source.strip():
+                init_output = _load_source(session, parser, braket_parser, init_source)
+                if init_output:
+                    print(init_output)
+        except Exception:
+            pass
+
+    for candidate in (
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "dirac", "lib", "ai.di"),
+        os.path.join(os.path.expanduser("~"), ".dirac", "lib", "user", "sys-router.di"),
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "dirac", "lib", "sys-router.di"),
+    ):
+        resolved = os.path.abspath(os.path.expanduser(candidate))
+        if not os.path.exists(resolved):
+            continue
+        try:
+            with open(resolved, "r", encoding="utf-8") as handle:
+                imported_source = handle.read()
+            if imported_source.strip():
+                import_output = _load_source(session, parser, braket_parser, imported_source)
+                if import_output:
+                    print(import_output)
+        except Exception:
+            pass
 
     print(BANNER)
 

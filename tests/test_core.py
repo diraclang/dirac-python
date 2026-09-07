@@ -306,6 +306,36 @@ class TestCoreRuntime(unittest.TestCase):
             self.assertEqual(payload["messages"][1]["role"], "user")
             self.assertIn("Say hello", payload["messages"][1]["content"])
 
+    def test_llm_tag_ollama_image_attribute_sends_image_payload(self):
+        class FakeHTTPResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps({"response": "A cat"}).encode("utf-8")
+
+        with patch("dirac.tags.llm_tag.request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value = FakeHTTPResponse()
+            png_data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z8xQAAAAASUVORK5CYII="
+            with tempfile.TemporaryDirectory() as tmpdir:
+                image_path = os.path.join(tmpdir, "sample.png")
+                with open(image_path, "wb") as handle:
+                    handle.write(__import__("base64").b64decode(png_data))
+
+                src = f'<dirac><llm provider="ollama" model="llava" image="{image_path}">what is in this</llm></dirac>'
+                output = execute(src)
+                self.assertEqual(normalize(output), "A cat")
+
+                request_obj = mock_urlopen.call_args[0][0]
+                payload = json.loads(request_obj.data.decode("utf-8"))
+                self.assertEqual(payload["model"], "llava")
+                self.assertIn("images", payload)
+                self.assertTrue(payload["images"][0].startswith("iVBORw0KGgo"))
+                self.assertIn("what is in this", payload["prompt"])
+
     def test_create_session_loads_custom_llm_config_from_config_yaml(self):
         from dirac.runtime.session import create_session
 
@@ -349,6 +379,13 @@ class TestCoreRuntime(unittest.TestCase):
         rc = run_shell_command("printf 'hello from shell\\n'")
         self.assertEqual(rc, 0)
 
+    def test_run_shell_command_expands_home_tilde_in_arguments(self):
+        with patch("dirac.shell.subprocess.run") as mock_run:
+            mock_run.return_value.returncode = 0
+            rc = run_shell_command("ls ~")
+            self.assertEqual(rc, 0)
+            self.assertEqual(mock_run.call_args[0][0], f"ls {os.path.expanduser('~')}")
+
     def test_shell_starts_in_braket_mode_by_default(self):
         from dirac import shell
 
@@ -371,6 +408,21 @@ class TestCoreRuntime(unittest.TestCase):
 
         mock_readline.set_history_length.assert_called_with(1000)
         mock_readline.read_history_file.assert_called_once_with(shell.HISTORY_FILE)
+
+    def test_shell_runs_init_script_on_startup(self):
+        from dirac import shell
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            init_path = os.path.join(tmpdir, "shell-init.di")
+            with open(init_path, "w", encoding="utf-8") as handle:
+                handle.write('<defvar name="boot" value="loaded" />\n<output>booted</output>\n')
+
+            with patch.object(shell, "_find_shell_init_script", return_value=init_path), patch("builtins.input", side_effect=[":quit"]):
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    shell.run()
+
+            self.assertIn("booted", out.getvalue())
 
     def test_shell_mode_runs_plain_unix_commands(self):
         from dirac import shell
