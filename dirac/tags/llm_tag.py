@@ -101,6 +101,40 @@ def _extract_prompt(session: DiracSession, element: DiracElement) -> str:
     raise ValueError("<llm> requires prompt content")
 
 
+def _extract_image_paths(session: DiracSession, element: DiracElement) -> list[str]:
+    candidates: list[str] = []
+    for name in ("image", "images", "image-path", "image-paths", "img"):
+        value = element.attributes.get(name)
+        if not value:
+            continue
+        for part in re.split(r"[,\s]+", str(value).strip()):
+            if part:
+                candidates.append(substitute_attribute(session, part))
+    return list(dict.fromkeys(candidates))
+
+
+def _normalize_image_payload(image_value: str) -> str:
+    value = image_value.strip()
+    if not value:
+        return ""
+
+    match = re.match(r"^data:(image/[a-zA-Z0-9.+-]+);base64,(.*)$", value)
+    if match:
+        return match.group(2)
+
+    expanded = os.path.expanduser(value)
+    if os.path.isabs(expanded):
+        resolved = expanded
+    else:
+        resolved = os.path.abspath(expanded)
+
+    if not os.path.exists(resolved):
+        raise FileNotFoundError(f"Image file not found: {value}")
+
+    with open(resolved, "rb") as handle:
+        return __import__("base64").b64encode(handle.read()).decode("ascii")
+
+
 def _strip_code_fence(response: str) -> str:
     text = response.strip()
     if not text.startswith("```"):
@@ -144,6 +178,10 @@ def execute_llm(session: DiracSession, element: DiracElement) -> None:
     if not prompt:
         raise ValueError("<llm> requires prompt content")
 
+    raw_image_paths = _extract_image_paths(session, element)
+    image_payload = [_normalize_image_payload(path) for path in raw_image_paths]
+    image_payload = [image for image in image_payload if image]
+
     client = session.llm_client or _build_client(session, provider, model)
     session.llm_client = client
     session.llm_provider = provider or session.llm_provider
@@ -185,7 +223,12 @@ def execute_llm(session: DiracSession, element: DiracElement) -> None:
     request_messages.append({"role": "user", "content": prompt})
 
     messages = request_messages
-    response = client.complete(prompt, model=model or "", messages=messages)
+    response = client.complete(
+        prompt,
+        model=model or "",
+        messages=messages,
+        images=image_payload if (provider or session.llm_provider or "").lower() == "ollama" else None,
+    )
     result = _strip_code_fence(response)
 
     if dialog_var:

@@ -421,7 +421,82 @@ class TestCoreRuntime(unittest.TestCase):
                 completer = mock_readline.set_completer.call_args[0][0]
 
             result = completer(f"cd {tmpdir}/de", 0)
-            self.assertTrue(result.startswith(f"{tmpdir}/demo-dir"))
+            self.assertTrue(result.startswith("demo-dir"))
+
+    def test_shell_autocomplete_suggests_bra_ket_attributes_for_existing_tag(self):
+        from dirac import shell
+
+        session = shell.create_session()
+        session.subroutines = [
+            type("Sub", (), {"name": "greet", "parameters": [{"name": "name", "type": "string"}, {"name": "count", "type": "number"}]})()
+        ]
+
+        result = shell._readline_completer("|greet na", 0, session)
+        self.assertEqual(result, "name=")
+
+    def test_shell_autocomplete_suggests_bra_ket_tag_names_like_llm(self):
+        from dirac import shell
+
+        session = shell.create_session()
+
+        self.assertIn("|llm", shell._readline_completer("|ll", 0, session))
+        self.assertIn("|llm", shell._readline_completer("|llm", 0, session))
+
+    def test_shell_autocomplete_suggests_bra_ket_attribute_prefix_from_readline_buffer(self):
+        from dirac import shell
+
+        session = shell.create_session()
+        with patch("dirac.shell.readline.get_line_buffer", return_value="|llm p"):
+            with redirect_stdout(io.StringIO()) as out:
+                result = shell._readline_completer("p", 0, session)
+                _ = shell._readline_completer("p", 1, session)
+        self.assertEqual(result, "provider=")
+        self.assertEqual(out.getvalue().count("provider="), 0)
+
+    def test_shell_autocomplete_suggests_second_bra_ket_attribute_after_first_is_filled(self):
+        from dirac import shell
+
+        session = shell.create_session()
+        with patch("dirac.shell.readline.get_line_buffer", return_value="|llm provider=ollama mo"):
+            result = shell._readline_completer("mo", 0, session)
+        self.assertEqual(result, "model=")
+
+    def test_shell_autocomplete_suggests_file_paths_for_llm_image_attribute(self):
+        from dirac import shell
+
+        session = shell.create_session()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            image_path = os.path.join(tmpdir, "demo-image.png")
+            with open(image_path, "w", encoding="utf-8") as handle:
+                handle.write("png")
+
+            with patch("dirac.shell.readline.get_line_buffer", return_value=f"|llm image={tmpdir}/de"):
+                result = shell._readline_completer(f"image={tmpdir}/de", 0, session)
+
+        self.assertTrue(result.startswith("demo-image.png"))
+
+    def test_shell_autocomplete_keeps_tilde_prefix_for_home_paths(self):
+        from dirac import shell
+
+        home_matches = shell._path_value_completion("|llm image=~/")
+        self.assertTrue(home_matches)
+        self.assertTrue(any(match.startswith("~/") for match in home_matches))
+        self.assertTrue(all(not match.startswith("~//") for match in home_matches))
+
+        ls_matches = shell._path_value_completion("ls -tl ~/")
+        self.assertTrue(ls_matches)
+        self.assertTrue(any(match.startswith("~/") for match in ls_matches))
+        self.assertTrue(all(not match.startswith("~//") for match in ls_matches))
+
+        partial_matches = shell._path_value_completion("|llm image=~/Down")
+        self.assertTrue(partial_matches)
+        self.assertTrue(any(match.startswith("~/Downloads/") for match in partial_matches))
+        self.assertTrue(all(not match.startswith("~/~/") for match in partial_matches))
+
+        nested_matches = shell._path_value_completion("|llm image=~/Downloads/IMG_")
+        self.assertTrue(nested_matches)
+        self.assertTrue(any(match.startswith("~/Downloads/IMG_") for match in nested_matches))
+        self.assertTrue(all(not match.startswith("~/Downloads/Downloads/") for match in nested_matches))
 
     def test_shell_runs_init_script_on_startup(self):
         from dirac import shell

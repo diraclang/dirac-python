@@ -14,8 +14,10 @@ from ..tags.foreach import execute_foreach
 from ..tags.if_tag import execute_if
 from ..tags.import_tag import execute_import
 from ..tags.input_tag import execute_input
+from ..tags.llm_tag import execute_llm
 from ..tags.loop import execute_loop
 from ..tags.output import execute_output
+from ..tags.parameters_tag import execute_parameters
 from ..tags.return_tag import execute_return
 from ..tags.subroutine import execute_subroutine
 from ..tags.system import execute_system
@@ -33,6 +35,7 @@ _BUILTIN_TAGS = {
     "output",
     "subroutine",
     "call",
+    "parameters",
     "loop",
     "foreach",
     "break",
@@ -44,6 +47,7 @@ _BUILTIN_TAGS = {
     "input",
     "return",
     "import",
+    "llm",
 }
 
 
@@ -81,6 +85,9 @@ def integrate(session: DiracSession, element: DiracElement) -> None:
     if tag == "call":
         execute_call(session, element)
         return
+    if tag == "parameters":
+        execute_parameters(session, element)
+        return
     if tag == "loop":
         execute_loop(session, element)
         return
@@ -110,6 +117,9 @@ def integrate(session: DiracSession, element: DiracElement) -> None:
         return
     if tag == "import":
         execute_import(session, element)
+        return
+    if tag == "llm":
+        execute_llm(session, element)
         return
 
     # Not a built-in tag - treat as a direct subroutine call, e.g. <greet name="Alice" />

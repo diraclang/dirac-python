@@ -65,7 +65,15 @@ def _complete_path_token(prefix: str) -> list[str]:
 
     expanded = os.path.expanduser(prefix)
     head, tail = os.path.split(expanded)
-    if not head:
+    if prefix.startswith("~"):
+        home_dir = os.path.expanduser("~")
+        if prefix.startswith("~/") or prefix == "~":
+            search_dir = home_dir if prefix == "~" else head if os.path.isdir(head) else home_dir
+            search_prefix = tail or ""
+        else:
+            search_dir = os.getcwd()
+            search_prefix = os.path.basename(prefix)
+    elif not head:
         search_dir = os.getcwd()
         search_prefix = tail or ""
     else:
@@ -77,32 +85,315 @@ def _complete_path_token(prefix: str) -> list[str]:
     except OSError:
         return []
 
+    home_dir = os.path.expanduser("~")
     matches: list[str] = []
     for name in entries:
         if not fnmatch.fnmatch(name, f"{search_prefix}*"):
             continue
         candidate = os.path.join(search_dir, name)
-        display = candidate if prefix.startswith("~") or prefix.startswith("/") else name
+
+        if prefix.startswith("~/"):
+            rel_path = os.path.relpath(candidate, home_dir)
+            display = os.path.join("~", rel_path)
+        elif prefix.startswith("~"):
+            display = name
+        elif prefix.startswith("/") or prefix.startswith("./") or prefix.startswith("../"):
+            display = name
+        else:
+            display = name
+
         if os.path.isdir(candidate):
-            display = candidate + os.sep
+            display = display + os.sep
         matches.append(display)
-
-    # Preserve the typed prefix style when a relative path is being completed.
-    if prefix.startswith("./") or prefix.startswith("../") or prefix.startswith("~/"):
-        return matches
-
-    if not os.path.dirname(prefix):
-        return matches
 
     return matches
 
 
-def _readline_completer(text: str, state: int) -> str | None:
-    """Provide shell-like path completion for readline in the interactive shell."""
+def _bra_ket_tag_completion(session: DiracSession, text: str) -> list[str]:
+    """Suggest known bra-ket tag names and subroutine names when typing |tag."""
     if not text:
+        return []
+
+    tag_prefix = text.strip()
+    if not tag_prefix.startswith("|"):
+        return []
+
+    partial = tag_prefix[1:]
+    if not partial:
+        return []
+
+    candidate_names = []
+    for sub in getattr(session, "subroutines", []):
+        name = getattr(sub, "name", None)
+        if name and str(name).lower().startswith(partial.lower()):
+            candidate_names.append(name)
+
+    builtin_names = [
+        "defvar", "variable", "assign", "output", "subroutine", "call",
+        "parameters", "loop", "foreach", "break", "if", "test-if", "eval",
+        "python", "system", "input", "return", "import", "llm"
+    ]
+    for name in builtin_names:
+        if name.lower().startswith(partial.lower()):
+            candidate_names.append(name)
+
+    unique_names = []
+    seen = set()
+    for name in candidate_names:
+        key = name.lower()
+        if key not in seen:
+            seen.add(key)
+            unique_names.append(name)
+
+    completions: list[str] = []
+    for name in sorted(unique_names):
+        sub = next((s for s in getattr(session, "subroutines", []) if getattr(s, "name", None) == name), None)
+        params = getattr(sub, "parameters", []) if sub else []
+        if params:
+            completions.append(f"|{name} ")
+        else:
+            completions.append(f"|{name}>")
+    return completions
+
+
+def _native_tag_metadata() -> dict[str, list[dict[str, str]]]:
+    """Load the authoritative built-in tag interface from native-tags.di."""
+    package_root = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.dirname(package_root)
+    parent_root = os.path.dirname(repo_root)
+
+    candidates = [
+        os.path.expanduser("~/dirac/lib/native-tags.di"),
+        os.path.join(os.path.expanduser("~"), ".dirac", "lib", "native-tags.di"),
+        os.path.join(parent_root, "dirac", "lib", "native-tags.di"),
+        os.path.join(repo_root, "lib", "native-tags.di"),
+        os.path.join(package_root, "../lib/native-tags.di"),
+    ]
+
+    for candidate in candidates:
+        resolved = os.path.abspath(os.path.expanduser(candidate))
+        if not os.path.exists(resolved):
+            continue
+        try:
+            with open(resolved, "r", encoding="utf-8") as handle:
+                source = handle.read()
+        except OSError:
+            continue
+
+        metadata: dict[str, list[dict[str, str]]] = {}
+        for match in re.finditer(r'<subroutine\s+name="([^"]+)"([^>]*)>', source, flags=re.DOTALL):
+            name = match.group(1).strip()
+            attrs = match.group(2)
+            params = []
+            for key, value in re.findall(r'(param-[A-Za-z0-9_-]+)="([^"]*)"', attrs):
+                param_name = key[5:]
+                label = param_name.replace("-", "")
+                params.append({"name": label, "description": value})
+            if params:
+                metadata[name] = params
+        if metadata:
+            return metadata
+    return {}
+
+
+def _tag_parameter_suggestions(session: DiracSession, tag_name: str, prefix: str = "") -> list[str]:
+    """Return parameter names for a tag, mixing session subroutines and native tag metadata."""
+    metadata = _native_tag_metadata()
+    params_by_name: dict[str, list[dict[str, str]]] = {}
+
+    for sub in getattr(session, "subroutines", []):
+        name = getattr(sub, "name", None)
+        if name:
+            params_by_name[name] = list(getattr(sub, "parameters", []) or [])
+
+    for name, params in metadata.items():
+        params_by_name.setdefault(name, params)
+
+    params = params_by_name.get(tag_name, [])
+    if not params:
+        return []
+
+    items = [str(p.get("name", "")) for p in params if str(p.get("name", "")).strip()]
+    if not prefix:
+        return [f"{item}=" for item in items]
+    return [f"{item}=" for item in items if item.lower().startswith(prefix.lower())]
+
+
+def _tag_name_suggestions(session: DiracSession, partial: str) -> list[str]:
+    """Return known tag names matching a partial bra-ket prefix."""
+    if not partial:
+        return []
+
+    names = set()
+    for sub in getattr(session, "subroutines", []):
+        name = getattr(sub, "name", None)
+        if name:
+            names.add(str(name))
+
+    metadata = _native_tag_metadata()
+    names.update(metadata.keys())
+
+    builtin_names = [
+        "defvar", "variable", "assign", "output", "subroutine", "call",
+        "parameters", "loop", "foreach", "break", "if", "test-if", "eval",
+        "python", "system", "input", "return", "import", "llm"
+    ]
+    names.update(builtin_names)
+
+    matches = sorted(name for name in names if name.lower().startswith(partial.lower()))
+    completions: list[str] = []
+    for name in matches:
+        params = _tag_parameter_suggestions(session, name)
+        completions.append(f"|{name} " if params else f"|{name}>")
+    return completions
+
+
+def _emit_tag_parameter_help(tag_name: str, session: DiracSession) -> None:
+    """Print parameter names/descriptions like the TypeScript shell does."""
+    metadata = _native_tag_metadata()
+    params_by_name: dict[str, list[dict[str, str]]] = {}
+    for sub in getattr(session, "subroutines", []):
+        name = getattr(sub, "name", None)
+        if name:
+            params_by_name[name] = list(getattr(sub, "parameters", []) or [])
+    params_by_name.update(metadata)
+
+    params = params_by_name.get(tag_name, [])
+    if not params:
+        return
+
+    print()
+    for param in params:
+        name = str(param.get("name", "")).strip()
+        if not name:
+            continue
+        description = str(param.get("description", "")).strip()
+        suffix = f" ({description})" if description else ""
+        print(f"  {name}={suffix}")
+
+
+def _bra_ket_attribute_completion(session: DiracSession, text: str) -> list[str]:
+    """Suggest remaining parameter names for an existing bra-ket tag while typing attributes."""
+    match = re.search(r"\|([A-Za-z0-9_-]+)\s+(.*)$", text)
+    if not match:
+        return []
+
+    tag_name = match.group(1)
+    rest = match.group(2).strip()
+    if not rest:
+        return _tag_parameter_suggestions(session, tag_name, "")
+
+    tokens = [token for token in rest.split() if token]
+    if not tokens:
+        return []
+
+    used_names = set()
+    for token in tokens[:-1]:
+        name = token.split("=", 1)[0].strip()
+        if name:
+            used_names.add(name.lower())
+
+    last_token = tokens[-1].strip()
+    partial = last_token.split("=", 1)[0].strip()
+
+    metadata = _native_tag_metadata()
+    params_by_name: dict[str, list[dict[str, str]]] = {}
+    for sub in getattr(session, "subroutines", []):
+        name = getattr(sub, "name", None)
+        if name:
+            params_by_name[name] = list(getattr(sub, "parameters", []) or [])
+    params_by_name.update(metadata)
+
+    params = params_by_name.get(tag_name, [])
+    if not params:
+        return []
+
+    items = [str(p.get("name", "")) for p in params if str(p.get("name", "")).strip()]
+    suggestions = []
+    for item in items:
+        lower = item.lower()
+        if lower in used_names:
+            continue
+        if not partial or lower.startswith(partial.lower()):
+            suggestions.append(f"{item}=")
+    return suggestions
+
+
+def _path_value_completion(text: str) -> list[str]:
+    """Handle filesystem completion when a shell value, attribute value, or command arg is a path."""
+    if not text:
+        return []
+
+    path_match = re.search(r'(?:(?<=^)|(?<=\s)|(?<=\=))((?:\.?\.?/|~/?|/)[^\s]*)$', text)
+    if not path_match:
+        return []
+
+    partial = path_match.group(1)
+    if partial.startswith("="):
+        partial = partial[1:]
+    if not partial:
+        return []
+    return _complete_path_token(partial)
+
+
+def _readline_completer(text: str, state: int, session: DiracSession | None = None) -> str | None:
+    """Provide shell-like path and bra-ket completion for readline in the interactive shell."""
+    if text is None:
         return None
 
-    token = text.rsplit(None, 1)[-1] if " " in text else text
+    if session is None:
+        session = create_session()
+
+    full_buffer = ""
+    if hasattr(readline, "get_line_buffer"):
+        try:
+            full_buffer = readline.get_line_buffer()
+        except Exception:
+            full_buffer = ""
+
+    active_text = text
+    if full_buffer and full_buffer.strip():
+        if full_buffer.strip().startswith("|") or "=" in full_buffer or full_buffer.strip().startswith(("cd ", "ls ", "cat ", "vim ", "nano ")):
+            active_text = full_buffer.strip()
+
+    exact_tag_name = re.search(r"\|([A-Za-z0-9_-]+)$", active_text)
+    if exact_tag_name:
+        partial = exact_tag_name.group(1)
+        tag_matches = _tag_name_suggestions(session, partial)
+        if tag_matches:
+            if state < len(tag_matches):
+                completion = tag_matches[state]
+                if state == 0 and completion.startswith(f"|{partial} "):
+                    tag_name = partial
+                    if tag_name in _native_tag_metadata() or any(getattr(sub, "name", None) == tag_name for sub in getattr(session, "subroutines", [])):
+                        _emit_tag_parameter_help(tag_name, session)
+                return completion
+            return None
+
+    path_matches = _path_value_completion(active_text)
+    if path_matches:
+        if state < len(path_matches):
+            return path_matches[state]
+        return None
+
+    bra_ket_matches = _bra_ket_attribute_completion(session, active_text)
+    if bra_ket_matches:
+        tag_name_match = re.search(r"\|([A-Za-z0-9_-]+)\s+", active_text)
+        if state == 0 and tag_name_match:
+            current_attr = active_text.rsplit(" ", 1)[-1].strip()
+            if not current_attr:
+                _emit_tag_parameter_help(tag_name_match.group(1), session)
+        if state < len(bra_ket_matches):
+            return bra_ket_matches[state]
+        return None
+
+    tag_name_match = re.search(r"\|([A-Za-z0-9_-]+)\s+", active_text)
+    if state == 0 and tag_name_match:
+        current_attr = active_text.rsplit(" ", 1)[-1].strip()
+        if not current_attr:
+            _emit_tag_parameter_help(tag_name_match.group(1), session)
+
+    token = active_text.rsplit(None, 1)[-1] if " " in active_text else active_text
     matches = _complete_path_token(token)
     if not matches:
         return None
@@ -111,13 +402,14 @@ def _readline_completer(text: str, state: int) -> str | None:
     return None
 
 
-def _configure_readline_completion() -> None:
+def _configure_readline_completion(session: DiracSession | None = None) -> None:
     """Enable tab completion for file and directory names in shell mode."""
     if readline is None:
         return
     try:
-        readline.set_completer(_readline_completer)
-        readline.set_completer_delims(" \t\n=/")
+        current_session = session or create_session()
+        readline.set_completer(lambda text, state, current_session=current_session: _readline_completer(text, state, current_session))
+        readline.set_completer_delims(" \t\n=")
         readline.parse_and_bind("tab: complete")
         readline.parse_and_bind("bind ^I rl_complete")
     except Exception:
@@ -429,8 +721,8 @@ def run_shell_command(command: str) -> int:
 
 def run() -> None:
     _configure_readline_history()
-    _configure_readline_completion()
     session = create_session()
+    _configure_readline_completion(session)
     parser = DiracParser()
     braket_parser = BraKetParser()
     braket_mode = True
