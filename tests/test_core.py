@@ -489,6 +489,33 @@ class TestCoreRuntime(unittest.TestCase):
         self.assertIn("|llm", shell._readline_completer("|ll", 0, session))
         self.assertIn("|llm", shell._readline_completer("|llm", 0, session))
 
+    def test_shell_autocomplete_suggests_subroutine_names_for_edit_command(self):
+        from dirac import shell
+
+        session = shell.create_session()
+        session.subroutines = [
+            type("Sub", (), {"name": "my-robot", "parameters": []})(),
+            type("Sub", (), {"name": "image-router", "parameters": []})(),
+        ]
+
+        with patch("dirac.shell.readline.get_line_buffer", return_value=":edit my"):
+            result = shell._readline_completer("my", 0, session)
+
+        self.assertEqual(result, "my-robot")
+
+    def test_shell_autocomplete_returns_none_for_unknown_edit_subroutine_prefix(self):
+        from dirac import shell
+
+        session = shell.create_session()
+        session.subroutines = [
+            type("Sub", (), {"name": "my-robot", "parameters": []})(),
+        ]
+
+        with patch("dirac.shell.readline.get_line_buffer", return_value=":edit zz"):
+            result = shell._readline_completer("zz", 0, session)
+
+        self.assertIsNone(result)
+
     def test_shell_autocomplete_suggests_bra_ket_attribute_prefix_from_readline_buffer(self):
         from dirac import shell
 
@@ -655,6 +682,62 @@ class TestCoreRuntime(unittest.TestCase):
         self.assertEqual([s.name for s in session.subroutines if s.name == "demo"], ["demo"])
         self.assertEqual(shell._find_subroutine(session, "demo").name, "demo")
 
+    def test_shell_save_defaults_to_subroutine_source_path(self):
+        from dirac import shell
+
+        session = shell.create_session()
+        src = """
+<dirac>
+  <subroutine name="my-robot">
+    <output>hello</output>
+  </subroutine>
+</dirac>
+"""
+        parser = shell.DiracParser()
+        ast = parser.parse(src)
+        shell.integrate(session, ast)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target = os.path.join(tmpdir, "my-robot.di")
+            sub = shell._find_subroutine(session, "my-robot")
+            sub.source_path = target
+
+            out = io.StringIO()
+            with redirect_stdout(out):
+                shell._save_subroutine_to_disk(session, parser, "my-robot")
+
+            self.assertTrue(os.path.exists(target))
+            with open(target, "r", encoding="utf-8") as handle:
+                text = handle.read()
+            self.assertIn("<my-robot|", text)
+            self.assertIn(target, out.getvalue())
+
+    def test_shell_save_without_source_path_defaults_to_user_lib(self):
+        from dirac import shell
+
+        session = shell.create_session()
+        src = """
+<dirac>
+  <subroutine name="demo-save">
+    <output>ok</output>
+  </subroutine>
+</dirac>
+"""
+        parser = shell.DiracParser()
+        ast = parser.parse(src)
+        shell.integrate(session, ast)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            expected = os.path.join(tmpdir, "demo-save.di")
+            out = io.StringIO()
+            with patch("dirac.shell.os.path.expanduser", side_effect=lambda p: tmpdir if p == "~/.dirac/lib/user" else os.path.expanduser(p)), redirect_stdout(out):
+                shell._save_subroutine_to_disk(session, parser, "demo-save")
+
+            self.assertTrue(os.path.exists(expected))
+            with open(expected, "r", encoding="utf-8") as handle:
+                text = handle.read()
+            self.assertIn("<demo-save|", text)
+
     def test_shell_edit_round_trip_keeps_valid_bra_ket(self):
         from dirac import shell
 
@@ -691,6 +774,60 @@ class TestCoreRuntime(unittest.TestCase):
             self.assertEqual(run_shell_command("cd " + start), 0)
         finally:
             os.chdir(start)
+
+    def test_shell_autosaves_user_subroutines_as_braket_on_braket_exit(self):
+        from dirac import shell
+
+        session = shell.create_session()
+        src = """
+<dirac>
+  <subroutine name="my-robot">
+    <output>hello</output>
+  </subroutine>
+</dirac>
+"""
+        parser = shell.DiracParser()
+        ast = parser.parse(src)
+        shell.integrate(session, ast)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            user_lib = os.path.join(tmpdir, "lib", "user")
+            target = os.path.join(user_lib, "my-robot.di")
+            sub = shell._find_subroutine(session, "my-robot")
+            sub.source_path = target
+
+            shell._autosave_user_subroutines_on_exit(session, True, user_lib_dir=user_lib)
+
+            self.assertTrue(os.path.exists(target))
+            with open(target, "r", encoding="utf-8") as handle:
+                text = handle.read()
+            self.assertIn("<my-robot|", text)
+            self.assertIn("|output>", text)
+
+    def test_shell_autosave_skips_when_not_in_braket_mode(self):
+        from dirac import shell
+
+        session = shell.create_session()
+        src = """
+<dirac>
+  <subroutine name="my-robot">
+    <output>hello</output>
+  </subroutine>
+</dirac>
+"""
+        parser = shell.DiracParser()
+        ast = parser.parse(src)
+        shell.integrate(session, ast)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            user_lib = os.path.join(tmpdir, "lib", "user")
+            target = os.path.join(user_lib, "my-robot.di")
+            sub = shell._find_subroutine(session, "my-robot")
+            sub.source_path = target
+
+            shell._autosave_user_subroutines_on_exit(session, False, user_lib_dir=user_lib)
+
+            self.assertFalse(os.path.exists(target))
 
 
 if __name__ == "__main__":

@@ -248,6 +248,43 @@ def _tag_name_suggestions(session: DiracSession, partial: str) -> list[str]:
     return completions
 
 
+def _session_subroutine_name_suggestions(session: DiracSession, prefix: str = "") -> list[str]:
+    """Return unique in-session subroutine names matching a prefix."""
+    names: list[str] = []
+    seen: set[str] = set()
+    for sub in getattr(session, "subroutines", []):
+        name = str(getattr(sub, "name", "") or "").strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        names.append(name)
+
+    if prefix:
+        lowered = prefix.lower()
+        names = [name for name in names if name.lower().startswith(lowered)]
+
+    return sorted(names)
+
+
+def _command_subroutine_completion(session: DiracSession, text: str) -> list[str]:
+    """Suggest subroutine names for command forms like ':edit <name>' and ':save <name>'."""
+    if not text:
+        return []
+
+    edit_match = re.match(r"^:edit\s+([^\s]*)$", text)
+    if edit_match:
+        return _session_subroutine_name_suggestions(session, edit_match.group(1))
+
+    save_match = re.match(r"^:save\s+([^\s]*)$", text)
+    if save_match:
+        return _session_subroutine_name_suggestions(session, save_match.group(1))
+
+    return []
+
+
 def _emit_tag_parameter_help(tag_name: str, session: DiracSession) -> None:
     """Print parameter names/descriptions like the TypeScript shell does."""
     metadata = _native_tag_metadata()
@@ -360,8 +397,19 @@ def _readline_completer(text: str, state: int, session: DiracSession | None = No
 
     active_text = text
     if full_buffer and full_buffer.strip():
-        if full_buffer.strip().startswith("|") or "=" in full_buffer or full_buffer.strip().startswith(("cd ", "ls ", "cat ", "vim ", "nano ")):
+        if (
+            full_buffer.strip().startswith("|")
+            or full_buffer.strip().startswith(":")
+            or "=" in full_buffer
+            or full_buffer.strip().startswith(("cd ", "ls ", "cat ", "vim ", "nano "))
+        ):
             active_text = full_buffer.strip()
+
+    command_matches = _command_subroutine_completion(session, active_text)
+    if command_matches:
+        if state < len(command_matches):
+            return command_matches[state]
+        return None
 
     exact_tag_name = re.search(r"\|([A-Za-z0-9_-]+)$", active_text)
     if exact_tag_name:
@@ -619,14 +667,81 @@ def _save_subroutine_to_disk(session, parser, name: str, path: str | None = None
         return
 
     if not path:
-        base = os.path.expanduser("~/.dirac/lib")
-        path = os.path.join(base, f"{name}.di")
+        source_path = getattr(subroutine, "source_path", None)
+        if source_path:
+            path = os.path.abspath(os.path.expanduser(str(source_path)))
+        else:
+            base = os.path.expanduser("~/.dirac/lib/user")
+            path = os.path.join(base, f"{name}.di")
 
     _ensure_parent_dir(path)
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(_serialize_subroutine_to_braket(subroutine))
 
     print(f"Saved subroutine '{name}' to {path}")
+
+
+def _is_within_directory(path: str, root: str) -> bool:
+    try:
+        return os.path.commonpath([path, root]) == root
+    except ValueError:
+        return False
+
+
+def _autosave_user_subroutines_on_exit(
+    session: DiracSession,
+    braket_mode: bool,
+    user_lib_dir: str | None = None,
+) -> None:
+    """Persist user-library subroutines in braket format when leaving braket mode."""
+    if not braket_mode:
+        return
+
+    root = os.path.abspath(os.path.expanduser(user_lib_dir or "~/.dirac/lib/user"))
+    by_path: dict[str, list] = {}
+
+    for sub in getattr(session, "subroutines", []):
+        source_path = getattr(sub, "source_path", None)
+        if not source_path:
+            continue
+        resolved = os.path.abspath(os.path.expanduser(str(source_path)))
+        if not _is_within_directory(resolved, root):
+            continue
+        by_path.setdefault(resolved, []).append(sub)
+
+    for target_path, sub_list in by_path.items():
+        # Keep only the latest definition per subroutine name for this file path.
+        latest: list = []
+        seen: set[str] = set()
+        for sub in reversed(sub_list):
+            name = str(getattr(sub, "name", "") or "").strip()
+            if not name:
+                continue
+            key = name.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            latest.append(sub)
+        latest.reverse()
+
+        chunks = [_serialize_subroutine_to_braket(sub).strip() for sub in latest]
+        chunks = [chunk for chunk in chunks if chunk]
+        if not chunks:
+            continue
+
+        content = "\n\n".join(chunks) + "\n"
+        _ensure_parent_dir(target_path)
+        try:
+            with open(target_path, "r", encoding="utf-8") as handle:
+                existing = handle.read()
+        except OSError:
+            existing = None
+
+        if existing == content:
+            continue
+
+        with open(target_path, "w", encoding="utf-8") as handle:
+            handle.write(content)
 
 
 def _normalize_question_mark_input(value: str, target: str | None = None) -> str:
@@ -762,140 +877,144 @@ def run() -> None:
 
     print(BANNER)
 
-    while True:
-        lines: list[str] = []
-        prompt = "shell> " if shell_mode else ("braket> " if braket_mode else "dirac> ")
+    try:
+        while True:
+            lines: list[str] = []
+            prompt = "shell> " if shell_mode else ("braket> " if braket_mode else "dirac> ")
 
-        try:
-            while True:
-                try:
-                    line = input(prompt)
-                except EOFError:
-                    print()
-                    return
+            try:
+                while True:
+                    try:
+                        line = input(prompt)
+                    except EOFError:
+                        print()
+                        return
 
-                stripped = line.strip()
+                    stripped = line.strip()
 
-                if not lines and stripped in (":quit", ":exit"):
-                    return
-                if not lines and stripped == ":help":
-                    print(HELP)
-                    break
-                if not lines and stripped.startswith(":edit"):
-                    parts = stripped.split(maxsplit=1)
-                    if len(parts) < 2:
-                        print("Usage: :edit <subroutine-name>")
-                    else:
-                        _edit_subroutine_in_editor(session, parser, parts[1].strip())
-                    break
-                if not lines and stripped.startswith(":save"):
-                    parts = stripped.split(maxsplit=2)
-                    if len(parts) < 2:
-                        print("Usage: :save <subroutine-name> [path]")
-                    else:
-                        target = parts[1].strip()
-                        out_path = parts[2].strip() if len(parts) > 2 else None
-                        _save_subroutine_to_disk(session, parser, target, out_path)
-                    break
-                if not lines and stripped == ":vars":
-                    if hasattr(session, "variables"):
-                        if not session.variables:
-                            print("(no variables)")
-                        else:
-                            for v in session.variables:
-                                print(f"  {v.name} = {v.value!r}")
-                    break
-                if not lines and stripped == ":subs":
-                    if hasattr(session, "subroutines"):
-                        if not session.subroutines:
-                            print("(no subroutines)")
-                        else:
-                            for s in session.subroutines:
-                                print(f"  {s.name}")
-                    break
-                if not lines and stripped == ":debug":
-                    session.debug = not session.debug
-                    print(f"debug = {session.debug}")
-                    break
-                if not lines and stripped == ":braket":
-                    braket_mode = not braket_mode
-                    shell_mode = False
-                    print(f"braket mode = {braket_mode}")
-                    break
-                if not lines and stripped == ":shell":
-                    shell_mode = not shell_mode
-                    braket_mode = False
-                    print(f"shell mode = {shell_mode}")
-                    if not shell_mode:
-                        print("Returned to DIRAC shell")
-                    break
-                if not lines and stripped in (":dirac", ":return"):
-                    shell_mode = False
-                    braket_mode = False
-                    print("Returned to DIRAC shell")
-                    break
-                if not lines and stripped == ":braket":
-                    shell_mode = False
-                    braket_mode = True
-                    print(f"braket mode = {braket_mode}")
-                    break
-                if shell_mode:
-                    if stripped == "":
+                    if not lines and stripped in (":quit", ":exit"):
+                        return
+                    if not lines and stripped == ":help":
+                        print(HELP)
                         break
-                    if stripped in (":dirac", ":return"):
+                    if not lines and stripped.startswith(":edit"):
+                        parts = stripped.split(maxsplit=1)
+                        if len(parts) < 2:
+                            print("Usage: :edit <subroutine-name>")
+                        else:
+                            _edit_subroutine_in_editor(session, parser, parts[1].strip())
+                        break
+                    if not lines and stripped.startswith(":save"):
+                        parts = stripped.split(maxsplit=2)
+                        if len(parts) < 2:
+                            print("Usage: :save <subroutine-name> [path]")
+                        else:
+                            target = parts[1].strip()
+                            out_path = parts[2].strip() if len(parts) > 2 else None
+                            _save_subroutine_to_disk(session, parser, target, out_path)
+                        break
+                    if not lines and stripped == ":vars":
+                        if hasattr(session, "variables"):
+                            if not session.variables:
+                                print("(no variables)")
+                            else:
+                                for v in session.variables:
+                                    print(f"  {v.name} = {v.value!r}")
+                        break
+                    if not lines and stripped == ":subs":
+                        if hasattr(session, "subroutines"):
+                            if not session.subroutines:
+                                print("(no subroutines)")
+                            else:
+                                for s in session.subroutines:
+                                    print(f"  {s.name}")
+                        break
+                    if not lines and stripped == ":debug":
+                        session.debug = not session.debug
+                        print(f"debug = {session.debug}")
+                        break
+                    if not lines and stripped == ":braket":
+                        braket_mode = not braket_mode
+                        shell_mode = False
+                        print(f"braket mode = {braket_mode}")
+                        break
+                    if not lines and stripped == ":shell":
+                        shell_mode = not shell_mode
+                        braket_mode = False
+                        print(f"shell mode = {shell_mode}")
+                        if not shell_mode:
+                            print("Returned to DIRAC shell")
+                        break
+                    if not lines and stripped in (":dirac", ":return"):
                         shell_mode = False
                         braket_mode = False
                         print("Returned to DIRAC shell")
                         break
-                    if stripped == ":braket":
+                    if not lines and stripped == ":braket":
                         shell_mode = False
                         braket_mode = True
                         print(f"braket mode = {braket_mode}")
                         break
-                    rc = run_shell_command(line)
-                    if rc != 0:
-                        print(f"shell exit code: {rc}")
-                    break
-                if braket_mode and _is_bare_unix_command(stripped):
-                    rc = run_shell_command(stripped)
-                    if rc != 0:
-                        print(f"shell exit code: {rc}")
-                    break
-                if braket_mode and _should_fallback_to_ai(session, stripped):
-                    lines.append(_normalize_question_mark_input(stripped, getattr(session, "question_mark_target", "ai")))
-                    break
-                if stripped == "" and not lines:
-                    break
-                if stripped == "" and lines:
-                    break
+                    if shell_mode:
+                        if stripped == "":
+                            break
+                        if stripped in (":dirac", ":return"):
+                            shell_mode = False
+                            braket_mode = False
+                            print("Returned to DIRAC shell")
+                            break
+                        if stripped == ":braket":
+                            shell_mode = False
+                            braket_mode = True
+                            print(f"braket mode = {braket_mode}")
+                            break
+                        rc = run_shell_command(line)
+                        if rc != 0:
+                            print(f"shell exit code: {rc}")
+                        break
+                    if braket_mode and _is_bare_unix_command(stripped):
+                        rc = run_shell_command(stripped)
+                        if rc != 0:
+                            print(f"shell exit code: {rc}")
+                        break
+                    if braket_mode and _should_fallback_to_ai(session, stripped):
+                        lines.append(_normalize_question_mark_input(stripped, getattr(session, "question_mark_target", "ai")))
+                        break
+                    if stripped == "" and not lines:
+                        break
+                    if stripped == "" and lines:
+                        break
 
-                lines.append(line)
-                prompt = "......" if braket_mode else "..... "
-        except KeyboardInterrupt:
-            print()
-            continue
+                    lines.append(line)
+                    prompt = "......" if braket_mode else "..... "
+            except KeyboardInterrupt:
+                print()
+                continue
 
-        if shell_mode:
-            continue
+            if shell_mode:
+                continue
 
-        if not lines:
-            continue
+            if not lines:
+                continue
 
+            _save_readline_history()
+            source = "\n".join(lines)
+            before = len(session.output)
+
+            try:
+                xml_source = braket_parser.parse(source) if braket_mode else source
+                ast = parser.parse(xml_source)
+                integrate(session, ast)
+            except Exception as exc:  # noqa: BLE001 - surface errors to the shell user
+                print(f"Error: {exc}")
+                continue
+
+            new_output = "".join(session.output[before:]).strip()
+            if new_output:
+                print(new_output)
+    finally:
         _save_readline_history()
-        source = "\n".join(lines)
-        before = len(session.output)
-
-        try:
-            xml_source = braket_parser.parse(source) if braket_mode else source
-            ast = parser.parse(xml_source)
-            integrate(session, ast)
-        except Exception as exc:  # noqa: BLE001 - surface errors to the shell user
-            print(f"Error: {exc}")
-            continue
-
-        new_output = "".join(session.output[before:]).strip()
-        if new_output:
-            print(new_output)
+        _autosave_user_subroutines_on_exit(session, braket_mode)
 
 
 if __name__ == "__main__":
