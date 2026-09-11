@@ -10,6 +10,7 @@ Usage:
 """
 
 import fnmatch
+import json
 import os
 import re
 import shlex
@@ -919,7 +920,7 @@ def run() -> None:
                                 print("(no variables)")
                             else:
                                 for v in session.variables:
-                                    print(f"  {v.name} = {v.value!r}")
+                                    print(f"  {v.name} = {_format_shell_value(v.value)}")
                         break
                     if not lines and stripped == ":subs":
                         if hasattr(session, "subroutines"):
@@ -1037,7 +1038,7 @@ def _print_vars(session: DiracSession) -> None:
         return
     for v in session.variables:
         flag = " [visible]" if v.visible else ""
-        print(f"  {v.name} = {v.value!r}{flag}")
+        print(f"  {v.name} = {_format_shell_value(v.value)}{flag}")
 
 
 def _print_subs(session: DiracSession) -> None:
@@ -1047,6 +1048,23 @@ def _print_subs(session: DiracSession) -> None:
     for s in session.subroutines:
         flag = " [visible]" if s.visible else ""
         print(f"  {s.name}{flag}")
+
+
+def _format_shell_value(value: object) -> str:
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, indent=2, ensure_ascii=False)
+
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith("{") or stripped.startswith("["):
+            try:
+                parsed = json.loads(stripped)
+            except Exception:
+                return repr(value)
+            if isinstance(parsed, (dict, list)):
+                return json.dumps(parsed, indent=2, ensure_ascii=False)
+
+    return repr(value)
 
 
 if __name__ == "__main__":

@@ -660,6 +660,24 @@ class TestCoreRuntime(unittest.TestCase):
         self.assertIn("shell mode = True", text)
         self.assertIn("Returned to braket shell", text)
 
+    def test_shell_vars_pretty_prints_json_values(self):
+        from dirac import shell
+        from dirac.types import Variable
+
+        session = shell.create_session()
+        session.variables = [
+            Variable(name="payload", value={"a": 1, "b": [1, 2]}),
+        ]
+
+        out = io.StringIO()
+        with redirect_stdout(out):
+            shell._print_vars(session)
+
+        text = out.getvalue()
+        self.assertIn('  payload = {', text)
+        self.assertIn('"a": 1', text)
+        self.assertIn('"b": [', text)
+
     def test_shell_question_mark_and_natural_language_fallback_to_ai(self):
         from dirac import shell
 
