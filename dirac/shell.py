@@ -945,10 +945,15 @@ def run() -> None:
                         if not shell_mode:
                             print("Returned to DIRAC shell")
                         break
-                    if not lines and stripped in (":dirac", ":return"):
+                    if not lines and stripped == ":dirac":
                         shell_mode = False
                         braket_mode = False
                         print("Returned to DIRAC shell")
+                        break
+                    if not lines and stripped == ":return":
+                        shell_mode = False
+                        braket_mode = True
+                        print("Returned to braket shell")
                         break
                     if not lines and stripped == ":braket":
                         shell_mode = False
@@ -958,10 +963,15 @@ def run() -> None:
                     if shell_mode:
                         if stripped == "":
                             break
-                        if stripped in (":dirac", ":return"):
+                        if stripped == ":dirac":
                             shell_mode = False
                             braket_mode = False
                             print("Returned to DIRAC shell")
+                            break
+                        if stripped == ":return":
+                            shell_mode = False
+                            braket_mode = True
+                            print("Returned to braket shell")
                             break
                         if stripped == ":braket":
                             shell_mode = False

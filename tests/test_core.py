@@ -352,6 +352,57 @@ class TestCoreRuntime(unittest.TestCase):
                 self.assertTrue(payload["images"][0].startswith("iVBORw0KGgo"))
                 self.assertIn("what is in this", payload["prompt"])
 
+    def test_llm_tag_switches_clients_when_provider_changes(self):
+        class FakeHTTPResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps(self.payload).encode("utf-8")
+
+        png_data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z8xQAAAAASUVORK5CYII="
+        with tempfile.TemporaryDirectory() as tmpdir:
+            image_path = os.path.join(tmpdir, "sample.png")
+            with open(image_path, "wb") as handle:
+                handle.write(__import__("base64").b64decode(png_data))
+
+            calls: list[str] = []
+
+            def fake_urlopen(request_obj, timeout=120):
+                calls.append(request_obj.full_url)
+                if request_obj.full_url.endswith("/chat"):
+                    return FakeHTTPResponse({"response": "from custom"})
+                return FakeHTTPResponse({"response": "from ollama"})
+
+            with patch("dirac.tags.llm_tag.request.urlopen", side_effect=fake_urlopen):
+                from dirac.runtime.session import create_session
+                from dirac.tags.llm_tag import execute_llm
+                from dirac.types import DiracElement
+
+                session = create_session()
+                execute_llm(
+                    session,
+                    DiracElement(tag="llm", attributes={"provider": "custom", "model": "demo"}, children=[], text="hello"),
+                )
+                execute_llm(
+                    session,
+                    DiracElement(
+                        tag="llm",
+                        attributes={"provider": "ollama", "model": "llava", "image": image_path},
+                        children=[],
+                        text="describe image",
+                    ),
+                )
+
+            self.assertEqual(calls[0], "http://localhost:5001/chat")
+            self.assertTrue(calls[1].endswith("/api/generate"))
+
     def test_llm_tag_ollama_router_system_prompt_is_inlined_into_prompt(self):
         class FakeHTTPResponse:
             def __enter__(self):
@@ -607,7 +658,7 @@ class TestCoreRuntime(unittest.TestCase):
         text = out.getvalue()
         self.assertIn("DIRAC Python Shell", text)
         self.assertIn("shell mode = True", text)
-        self.assertIn("Returned to DIRAC shell", text)
+        self.assertIn("Returned to braket shell", text)
 
     def test_shell_question_mark_and_natural_language_fallback_to_ai(self):
         from dirac import shell

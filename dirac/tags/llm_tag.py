@@ -191,7 +191,20 @@ def execute_llm(session: DiracSession, element: DiracElement) -> None:
     image_payload = [_normalize_image_payload(path) for path in raw_image_paths]
     image_payload = [image for image in image_payload if image]
 
-    client = session.llm_client or _build_client(session, provider, model)
+    provider_name = (provider or session.llm_provider or "").lower()
+    requested_model = model or session.llm_model
+    cached_provider = (session.llm_provider or "").lower()
+    cached_model = session.llm_model
+
+    if (
+        session.llm_client is None
+        or cached_provider != provider_name
+        or cached_model != requested_model
+    ):
+        client = _build_client(session, provider, model)
+    else:
+        client = session.llm_client
+
     session.llm_client = client
     session.llm_provider = provider or session.llm_provider
     session.llm_model = model or session.llm_model
@@ -232,7 +245,6 @@ def execute_llm(session: DiracSession, element: DiracElement) -> None:
     request_messages.append({"role": "user", "content": prompt})
 
     messages = request_messages
-    provider_name = (provider or session.llm_provider or "").lower()
     request_prompt = _messages_to_ollama_prompt(messages) if provider_name == "ollama" else prompt
     response = client.complete(
         request_prompt,
