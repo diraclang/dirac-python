@@ -150,6 +150,15 @@ def _strip_code_fence(response: str) -> str:
     return text
 
 
+def _messages_to_ollama_prompt(messages: list[dict[str, str]]) -> str:
+    lines: list[str] = []
+    for message in messages:
+        role = str(message.get("role", "user")).strip().capitalize() or "User"
+        content = str(message.get("content", "")).strip()
+        lines.append(f"{role}: {content}")
+    return "\n".join(lines).strip()
+
+
 def _has_xml_tag(text: str) -> bool:
     return bool(_XML_TAG_RE.search(text))
 
@@ -223,11 +232,13 @@ def execute_llm(session: DiracSession, element: DiracElement) -> None:
     request_messages.append({"role": "user", "content": prompt})
 
     messages = request_messages
+    provider_name = (provider or session.llm_provider or "").lower()
+    request_prompt = _messages_to_ollama_prompt(messages) if provider_name == "ollama" else prompt
     response = client.complete(
-        prompt,
+        request_prompt,
         model=model or "",
         messages=messages,
-        images=image_payload if (provider or session.llm_provider or "").lower() == "ollama" else None,
+        images=image_payload if provider_name == "ollama" else None,
     )
     result = _strip_code_fence(response)
 

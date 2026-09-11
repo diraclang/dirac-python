@@ -87,4 +87,5 @@ class DiracSession:
     # Import tracking / file context
     current_file: Optional[str] = None
     imported_files: set = field(default_factory=set)
+    active_imports: set = field(default_factory=set)
     library_paths: list = field(default_factory=list)

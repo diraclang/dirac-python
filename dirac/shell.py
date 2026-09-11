@@ -336,6 +336,13 @@ def _path_value_completion(text: str) -> list[str]:
     return _complete_path_token(partial)
 
 
+def _is_path_completion_context(text: str) -> bool:
+    """Return True when cursor is currently on a path-like token."""
+    if not text:
+        return False
+    return bool(re.search(r'(?:(?<=^)|(?<=\s)|(?<=\=))(?:\.?\.?/|~/?|/)[^\s]*$', text))
+
+
 def _readline_completer(text: str, state: int, session: DiracSession | None = None) -> str | None:
     """Provide shell-like path and bra-ket completion for readline in the interactive shell."""
     if text is None:
@@ -374,6 +381,8 @@ def _readline_completer(text: str, state: int, session: DiracSession | None = No
     if path_matches:
         if state < len(path_matches):
             return path_matches[state]
+        return None
+    if _is_path_completion_context(active_text):
         return None
 
     bra_ket_matches = _bra_ket_attribute_completion(session, active_text)
@@ -450,13 +459,6 @@ def _find_shell_init_script() -> str | None:
             return resolved
     return None
 
-
-COMMON_UNIX_COMMANDS = {
-    "ls", "pwd", "cd", "echo", "cat", "head", "tail", "wc", "mkdir", "rmdir",
-    "touch", "rm", "cp", "mv", "find", "grep", "ps", "whoami", "date", "uname",
-    "which", "clear", "env", "printenv", "vi", "vim", "nvim", "python", "python3",
-    "node", "npm", "yarn", "pnpm", "git", "curl", "wget", "ssh", "scp", "lsb_release",
-}
 
 HELP = """Commands:
   :vars    List current variables
@@ -671,19 +673,19 @@ def _should_fallback_to_ai(session: DiracSession, line: str) -> bool:
 
 
 def _is_bare_unix_command(line: str) -> bool:
-    """Detect a bare shell command in bra-ket mode using a safe allowlist."""
+    """Detect shell command input in bra-ket mode for automatic pass-through."""
     stripped = line.strip()
     if not stripped or stripped.startswith(":") or stripped.startswith("|") or stripped.startswith("<"):
         return False
-    if any(ch in stripped for ch in ("<", ">", "{", "}", "=", "&")):
+    if stripped.startswith("?"):
+        return False
+    if _is_likely_natural_language(stripped):
         return False
     try:
-        argv = shlex.split(stripped)
+        shlex.split(stripped)
     except ValueError:
         return False
-    if not argv:
-        return False
-    return argv[0] in COMMON_UNIX_COMMANDS
+    return True
 
 
 def _expand_user_home_in_command(command: str) -> str:

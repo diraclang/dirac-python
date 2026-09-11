@@ -10,6 +10,10 @@ from ..runtime.session import substitute_attribute
 from ..types import DiracElement, DiracSession
 
 
+def _has_live_subroutine_from_path(session: DiracSession, import_path: str) -> bool:
+    return any(getattr(sub, "source_path", None) == import_path for sub in session.subroutines)
+
+
 def _resolve_import_path(session: DiracSession, src: str) -> str:
     current_dir = os.path.dirname(session.current_file) if session.current_file else os.getcwd()
     candidate_paths = []
@@ -47,11 +51,22 @@ def execute_import(session: DiracSession, element: DiracElement) -> None:
 
     if not getattr(session, "imported_files", None):
         session.imported_files = set()
+    if not getattr(session, "active_imports", None):
+        session.active_imports = set()
 
-    if import_path in session.imported_files:
+    # Circular import guard: if this path is currently being loaded in the
+    # same import chain, skip it.
+    if import_path in session.active_imports:
         return
 
+    if import_path in session.imported_files:
+        # The file was imported before. If its subroutines are still present,
+        # skip re-import. If they were scoped and cleaned up, reload it.
+        if _has_live_subroutine_from_path(session, import_path):
+            return
+
     session.imported_files.add(import_path)
+    session.active_imports.add(import_path)
     previous_file = session.current_file
     session.current_file = import_path
 
@@ -73,3 +88,4 @@ def execute_import(session: DiracSession, element: DiracElement) -> None:
         integrate(session, ast)
     finally:
         session.current_file = previous_file
+        session.active_imports.discard(import_path)

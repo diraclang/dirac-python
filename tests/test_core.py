@@ -238,6 +238,22 @@ class TestCoreRuntime(unittest.TestCase):
             integrate(session, element)
             self.assertEqual([s.name for s in session.subroutines if s.name == "demo"], ["demo"])
 
+    def test_import_inside_subroutine_reloads_after_scope_cleanup(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            helper_path = os.path.join(tmpdir, "helper.di")
+            wrapper_path = os.path.join(tmpdir, "wrapper.di")
+
+            with open(helper_path, "w", encoding="utf-8") as handle:
+                handle.write('<subroutine name="helper"><output>ok</output></subroutine>')
+
+            with open(wrapper_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    f'<subroutine name="wrapper"><import src="{helper_path}" /><helper /></subroutine>'
+                )
+
+            src = f'<dirac><import src="{wrapper_path}" /><wrapper /><wrapper /></dirac>'
+            self.assertEqual(normalize(execute(src)), "ok ok")
+
     def test_parameters_select_star_executes_call_children(self):
         src = '''
 <dirac>
@@ -335,6 +351,37 @@ class TestCoreRuntime(unittest.TestCase):
                 self.assertIn("images", payload)
                 self.assertTrue(payload["images"][0].startswith("iVBORw0KGgo"))
                 self.assertIn("what is in this", payload["prompt"])
+
+    def test_llm_tag_ollama_router_system_prompt_is_inlined_into_prompt(self):
+        class FakeHTTPResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps({"response": "ok"}).encode("utf-8")
+
+        with patch("dirac.tags.llm_tag.request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value = FakeHTTPResponse()
+
+            src = """
+<dirac>
+  <subroutine name="image-router">
+    <output>Always output XML only: &lt;human/&gt; or &lt;no-human/&gt;.</output>
+  </subroutine>
+  <llm provider="ollama" model="llava" router="image-router">please categorize</llm>
+</dirac>
+"""
+            output = execute(src)
+            self.assertEqual(normalize(output), "ok")
+
+            request_obj = mock_urlopen.call_args[0][0]
+            payload = json.loads(request_obj.data.decode("utf-8"))
+            prompt = payload.get("prompt", "")
+            self.assertIn("System: Always output XML only", prompt)
+            self.assertIn("User: please categorize", prompt)
 
     def test_create_session_loads_custom_llm_config_from_config_yaml(self):
         from dirac.runtime.session import create_session
@@ -475,6 +522,15 @@ class TestCoreRuntime(unittest.TestCase):
 
         self.assertTrue(result.startswith("demo-image.png"))
 
+    def test_shell_autocomplete_unmatched_path_keeps_input_unchanged(self):
+        from dirac import shell
+
+        session = shell.create_session()
+        with patch("dirac.shell.readline.get_line_buffer", return_value="|llm image=/definitely-not-a-real-dir/nope"):
+            result = shell._readline_completer("image=/definitely-not-a-real-dir/nope", 0, session)
+
+        self.assertIsNone(result)
+
     def test_shell_autocomplete_keeps_tilde_prefix_for_home_paths(self):
         from dirac import shell
 
@@ -546,6 +602,19 @@ class TestCoreRuntime(unittest.TestCase):
 
         self.assertTrue(mock_run.called)
         self.assertEqual(mock_run.call_args[0][0], "ls")
+        self.assertIn("DIRAC Python Shell", out.getvalue())
+
+    def test_shell_autoruns_non_allowlisted_commands_in_braket_mode(self):
+        from dirac import shell
+
+        command = "awk 'BEGIN { print 1 }'"
+        with patch("builtins.input", side_effect=[command, ":quit"]), patch("dirac.shell.run_shell_command", return_value=0) as mock_run:
+            out = io.StringIO()
+            with redirect_stdout(out):
+                shell.run()
+
+        self.assertTrue(mock_run.called)
+        self.assertEqual(mock_run.call_args[0][0], command)
         self.assertIn("DIRAC Python Shell", out.getvalue())
 
     def test_shell_save_and_edit_subroutine(self):
