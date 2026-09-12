@@ -10,7 +10,7 @@ from . import execute
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="dirac-py", description="Run a DIRAC (.di or .bk) script.")
+    parser = argparse.ArgumentParser(prog="paul", description="Run a DIRAC (.di or .bk) script.")
     parser.add_argument("file", help="Path to a .di (XML) or .bk (bra-ket) file to execute")
     parser.add_argument(
         "--format",
