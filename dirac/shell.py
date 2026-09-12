@@ -530,6 +530,12 @@ In shell mode, you can type plain Unix commands like:
   shell> vi foo.txt
   shell> exit
 
+AI mode:
+    ? <text>  Enter AI mode and send the query
+    ?>        In AI mode, each non-empty line is sent to AI
+    blank line exits AI mode
+    :dirac, :braket, :shell, and :return also exit AI mode
+
 Example:
   dirac> <defvar name="x" value="5" />
   .....

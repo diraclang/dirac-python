@@ -660,6 +660,19 @@ class TestCoreRuntime(unittest.TestCase):
         self.assertIn("shell mode = True", text)
         self.assertIn("Returned to braket shell", text)
 
+    def test_shell_help_documents_question_mark_mode(self):
+        from dirac import shell
+
+        with patch("builtins.input", side_effect=[":help", ":quit"]):
+            out = io.StringIO()
+            with redirect_stdout(out):
+                shell.run()
+
+        text = out.getvalue()
+        self.assertIn("AI mode:", text)
+        self.assertIn("? <text>  Enter AI mode and send the query", text)
+        self.assertIn("blank line exits AI mode", text)
+
     def test_shell_vars_pretty_prints_json_values(self):
         from dirac import shell
         from dirac.types import Variable
