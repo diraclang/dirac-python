@@ -688,6 +688,27 @@ class TestCoreRuntime(unittest.TestCase):
         self.assertFalse(shell._is_likely_natural_language("ls -la"))
         self.assertTrue(shell._should_fallback_to_ai(session, "what is the best way to sort a list?"))
 
+    def test_shell_question_mark_mode_is_sticky_until_blank_line(self):
+        from dirac import shell
+
+        sources = []
+        original_parse = shell.BraKetParser.parse
+
+        def fake_braket_parse(self, source):
+            if source.lstrip().startswith("|ai>"):
+                sources.append(source)
+            return original_parse(self, source)
+
+        with patch("dirac.shell.BraKetParser.parse", new=fake_braket_parse), patch("dirac.shell.run_shell_command", return_value=0) as mock_run:
+            with patch("builtins.input", side_effect=["? explain recursion", "x = y", "", "ls", ":quit"]):
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    shell.run()
+
+        self.assertEqual(sources, ["|ai>explain recursion", "|ai>x = y"])
+        self.assertTrue(mock_run.called)
+        self.assertEqual(mock_run.call_args[0][0], "ls")
+
     def test_shell_autoruns_common_unix_commands_in_braket_mode(self):
         from dirac import shell
 

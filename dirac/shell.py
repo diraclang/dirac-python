@@ -845,6 +845,7 @@ def run() -> None:
     braket_parser = BraKetParser()
     braket_mode = True
     shell_mode = False
+    ai_mode = False
 
     init_script = _find_shell_init_script()
     if init_script:
@@ -881,7 +882,7 @@ def run() -> None:
     try:
         while True:
             lines: list[str] = []
-            prompt = "shell> " if shell_mode else ("braket> " if braket_mode else "dirac> ")
+            prompt = "shell> " if shell_mode else ("?> " if ai_mode else ("braket> " if braket_mode else "dirac> "))
 
             try:
                 while True:
@@ -892,6 +893,13 @@ def run() -> None:
                         return
 
                     stripped = line.strip()
+
+                    if ai_mode and stripped == "":
+                        ai_mode = False
+                        break
+
+                    if ai_mode and stripped.startswith(":"):
+                        ai_mode = False
 
                     if not lines and stripped in (":quit", ":exit"):
                         return
@@ -965,16 +973,19 @@ def run() -> None:
                         if stripped == "":
                             break
                         if stripped == ":dirac":
+                            ai_mode = False
                             shell_mode = False
                             braket_mode = False
                             print("Returned to DIRAC shell")
                             break
                         if stripped == ":return":
+                            ai_mode = False
                             shell_mode = False
                             braket_mode = True
                             print("Returned to braket shell")
                             break
                         if stripped == ":braket":
+                            ai_mode = False
                             shell_mode = False
                             braket_mode = True
                             print(f"braket mode = {braket_mode}")
@@ -983,13 +994,28 @@ def run() -> None:
                         if rc != 0:
                             print(f"shell exit code: {rc}")
                         break
+                    if ai_mode:
+                        target_name = getattr(session, "question_mark_target", "ai") or "ai"
+                        ai_input = stripped[1:].strip() if stripped.startswith("?") else stripped
+                        if not ai_input:
+                            break
+                        lines.append(f"|{target_name}>{ai_input}")
+                        break
                     if braket_mode and _is_bare_unix_command(stripped):
                         rc = run_shell_command(stripped)
                         if rc != 0:
                             print(f"shell exit code: {rc}")
                         break
                     if braket_mode and _should_fallback_to_ai(session, stripped):
-                        lines.append(_normalize_question_mark_input(stripped, getattr(session, "question_mark_target", "ai")))
+                        target_name = getattr(session, "question_mark_target", "ai") or "ai"
+                        if stripped.startswith("?"):
+                            ai_mode = True
+                            ai_input = stripped[1:].strip()
+                            if not ai_input:
+                                break
+                            lines.append(f"|{target_name}>{ai_input}")
+                            break
+                        lines.append(f"|{target_name}>{stripped}")
                         break
                     if stripped == "" and not lines:
                         break
