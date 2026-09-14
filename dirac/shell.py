@@ -529,26 +529,56 @@ def _find_reference_config_template() -> str | None:
     return None
 
 
+def _find_reference_ai_template() -> str | None:
+    """Return the packaged feedback-enabled ai.subroutine template if available."""
+    package_root = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.dirname(package_root)
+    parent_root = os.path.dirname(repo_root)
+
+    candidates = [
+        os.path.join(parent_root, "dirac", "lib", "ai.di"),
+        os.path.join(repo_root, "lib", "ai.di"),
+        os.path.join(package_root, "lib", "ai.di"),
+    ]
+
+    for candidate in candidates:
+        resolved = os.path.abspath(os.path.expanduser(candidate))
+        if os.path.exists(resolved):
+            return resolved
+    return None
+
+
 def _setup_local_ai_config() -> None:
-    """Create ~/.dirac/config.yml from the packaged Ollama reference config."""
+    """Create or refresh the local Ollama config and ai wrapper in ~/.dirac."""
     template_path = _find_reference_config_template()
     if template_path is None:
         print("Reference config template not found")
         return
 
     target_path = os.path.expanduser("~/.dirac/config.yml")
-    if os.path.exists(target_path):
+    if not os.path.exists(target_path):
+        _ensure_parent_dir(target_path)
+        with open(template_path, "r", encoding="utf-8") as handle:
+            template = handle.read()
+        with open(target_path, "w", encoding="utf-8") as handle:
+            handle.write(template)
+        print(f"Created {target_path}")
+    else:
         print(f"Config already exists: {target_path}")
-        print("Remove it first if you want to replace it with the local AI template.")
+
+    ai_template_path = _find_reference_ai_template()
+    if ai_template_path is None:
+        print("Reference AI wrapper template not found")
         return
 
-    _ensure_parent_dir(target_path)
-    with open(template_path, "r", encoding="utf-8") as handle:
-        template = handle.read()
-    with open(target_path, "w", encoding="utf-8") as handle:
-        handle.write(template)
+    ai_target_path = os.path.expanduser("~/.dirac/lib/ai.di")
+    _ensure_parent_dir(ai_target_path)
+    with open(ai_template_path, "r", encoding="utf-8") as handle:
+        ai_template = handle.read()
+    with open(ai_target_path, "w", encoding="utf-8") as handle:
+        handle.write(ai_template)
 
-    print(f"Created {target_path}")
+    print(f"Refreshed {ai_target_path}")
     print("Next steps:")
     print("  1. brew install ollama")
     print("  2. brew services start ollama")

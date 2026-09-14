@@ -171,6 +171,11 @@ def _execute_generated_dirac(session: DiracSession, code: str) -> None:
     integrate(session, ast)
 
 
+def _persist_dialog(session: DiracSession, dialog_var: str | None, history: list[dict[str, str]]) -> None:
+    if dialog_var:
+        set_variable(session, dialog_var, json.dumps(history), True)
+
+
 def execute_llm(session: DiracSession, element: DiracElement) -> None:
     provider = element.attributes.get("provider") or session.llm_provider
     model = element.attributes.get("model") or session.llm_model
@@ -244,6 +249,10 @@ def execute_llm(session: DiracSession, element: DiracElement) -> None:
         request_messages.append({"role": "system", "content": router_prompt})
     request_messages.append({"role": "user", "content": prompt})
 
+    if dialog_var:
+        history.append({"role": "user", "content": prompt})
+        _persist_dialog(session, dialog_var, history)
+
     messages = request_messages
     request_prompt = _messages_to_ollama_prompt(messages) if provider_name == "ollama" else prompt
     response = client.complete(
@@ -255,7 +264,8 @@ def execute_llm(session: DiracSession, element: DiracElement) -> None:
     result = _strip_code_fence(response)
 
     if dialog_var:
-        set_variable(session, dialog_var, json.dumps(messages + [{"role": "assistant", "content": result}]), True)
+        history.append({"role": "assistant", "content": result})
+        _persist_dialog(session, dialog_var, history)
 
     if execute_mode:
         iteration = 0
@@ -281,8 +291,12 @@ def execute_llm(session: DiracSession, element: DiracElement) -> None:
                 if not feedback_mode:
                     break
                 feedback_prompt = "The code executed successfully. Here is the output:\n```\n" + exec_output + "\n```"
-                result = client.complete(feedback_prompt, model=model or "", messages=messages + [{"role": "assistant", "content": code}, {"role": "user", "content": feedback_prompt}])
+                history.append({"role": "user", "content": feedback_prompt})
+                _persist_dialog(session, dialog_var, history)
+                result = client.complete(feedback_prompt, model=model or "", messages=list(history))
                 result = _strip_code_fence(result)
+                history.append({"role": "assistant", "content": result})
+                _persist_dialog(session, dialog_var, history)
                 if result.strip() in ("<DONE />", "<DONE/>"):
                     break
                 if not _has_xml_tag(result.strip()):
@@ -295,8 +309,12 @@ def execute_llm(session: DiracSession, element: DiracElement) -> None:
                 if not feedback_mode or iteration >= max_iterations:
                     raise
                 error_prompt = f"System: Your code had an execution error:\n{exc}\nPlease fix the error and return valid Dirac XML."
-                result = client.complete(error_prompt, model=model or "", messages=messages + [{"role": "assistant", "content": code}, {"role": "user", "content": error_prompt}])
+                history.append({"role": "user", "content": error_prompt})
+                _persist_dialog(session, dialog_var, history)
+                result = client.complete(error_prompt, model=model or "", messages=list(history))
                 result = _strip_code_fence(result)
+                history.append({"role": "assistant", "content": result})
+                _persist_dialog(session, dialog_var, history)
                 if not _has_xml_tag(result.strip()):
                     if result_var:
                         set_variable(session, result_var, result, False)

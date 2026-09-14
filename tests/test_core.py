@@ -469,6 +469,50 @@ class TestCoreRuntime(unittest.TestCase):
             self.assertIn("This is analysis text without XML.", output)
             self.assertEqual(mock_urlopen.call_count, 1)
 
+    def test_llm_execute_with_feedback_persists_second_round_response(self):
+        class FakeHTTPResponse:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps(self.payload).encode("utf-8")
+
+        from dirac.runtime.session import create_session, get_variable
+        from dirac.tags.llm_tag import execute_llm
+        from dirac.types import DiracElement
+
+        responses = iter([
+            {"response": "<output>first round</output>"},
+            {"response": "second round plain text"},
+        ])
+
+        def fake_urlopen(*args, **kwargs):
+            return FakeHTTPResponse(next(responses))
+
+        with patch("dirac.tags.llm_tag.request.urlopen", side_effect=fake_urlopen):
+            session = create_session()
+            element = DiracElement(
+                tag="llm",
+                attributes={"provider": "custom", "model": "demo", "execute": "true", "feedback": "true", "save-dialog": "true"},
+                children=[],
+                text="say hi",
+            )
+            execute_llm(session, element)
+
+        dialog = get_variable(session, "__llm_dialog__")
+        self.assertIsInstance(dialog, str)
+        self.assertIn("say hi", dialog)
+        self.assertIn("first round", dialog)
+        self.assertIn("second round plain text", dialog)
+        self.assertEqual(dialog.count('"role": "assistant"'), 2)
+        self.assertEqual(dialog.count('"role": "user"'), 2)
+
     def test_system_basic(self):
         src = "<dirac><system>echo hello</system></dirac>"
         self.assertEqual(normalize(execute(src)), "hello")
@@ -679,6 +723,7 @@ class TestCoreRuntime(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             home = Path(tmpdir)
             config_path = home / ".dirac" / "config.yml"
+            ai_path = home / ".dirac" / "lib" / "ai.di"
 
             with patch.dict(os.environ, {"HOME": tmpdir}, clear=False), patch("builtins.input", side_effect=[":setup-local-ai", ":quit"]):
                 out = io.StringIO()
@@ -691,8 +736,14 @@ class TestCoreRuntime(unittest.TestCase):
             self.assertIn("llmModel: qwen2.5:3b", content)
             self.assertIn("embeddingServer:", content)
 
+            self.assertTrue(ai_path.exists())
+            ai_content = ai_path.read_text(encoding="utf-8")
+            self.assertIn('feedback="true"', ai_content)
+            self.assertIn('save-dialog="true"', ai_content)
+
             text = out.getvalue()
             self.assertIn("Created", text)
+            self.assertIn("Refreshed", text)
             self.assertIn("ollama pull qwen2.5:3b", text)
 
     def test_shell_vars_pretty_prints_json_values(self):
