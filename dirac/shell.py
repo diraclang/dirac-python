@@ -509,12 +509,61 @@ def _find_shell_init_script() -> str | None:
     return None
 
 
+def _find_reference_config_template() -> str | None:
+    """Return the packaged local-AI config template if it is available."""
+    package_root = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.dirname(package_root)
+    parent_root = os.path.dirname(repo_root)
+
+    candidates = [
+        os.path.join(os.path.expanduser("~"), ".dirac", "config.reference.yml"),
+        os.path.join(parent_root, "dirac", "lib", "config.reference.yml"),
+        os.path.join(repo_root, "lib", "config.reference.yml"),
+        os.path.join(package_root, "lib", "config.reference.yml"),
+    ]
+
+    for candidate in candidates:
+        resolved = os.path.abspath(os.path.expanduser(candidate))
+        if os.path.exists(resolved):
+            return resolved
+    return None
+
+
+def _setup_local_ai_config() -> None:
+    """Create ~/.dirac/config.yml from the packaged Ollama reference config."""
+    template_path = _find_reference_config_template()
+    if template_path is None:
+        print("Reference config template not found")
+        return
+
+    target_path = os.path.expanduser("~/.dirac/config.yml")
+    if os.path.exists(target_path):
+        print(f"Config already exists: {target_path}")
+        print("Remove it first if you want to replace it with the local AI template.")
+        return
+
+    _ensure_parent_dir(target_path)
+    with open(template_path, "r", encoding="utf-8") as handle:
+        template = handle.read()
+    with open(target_path, "w", encoding="utf-8") as handle:
+        handle.write(template)
+
+    print(f"Created {target_path}")
+    print("Next steps:")
+    print("  1. brew install ollama")
+    print("  2. brew services start ollama")
+    print("  3. ollama pull qwen2.5:3b")
+    print("  4. ollama pull embeddinggemma")
+    print("  5. pash")
+
+
 HELP = """Commands:
   :vars    List current variables
   :subs    List registered subroutines
   :debug   Toggle debug logging
   :braket  Toggle bra-ket notation mode (default: XML)
   :shell   Toggle shell mode for running Unix commands directly
+    :setup-local-ai  Create ~/.dirac/config.yml from the Ollama template
   :edit <name>   Open a subroutine in your editor ($EDITOR or vi)
   :save <name> [path]  Save a subroutine to disk
   :help    Show this help
@@ -859,7 +908,12 @@ def run() -> None:
             with open(init_script, "r", encoding="utf-8") as handle:
                 init_source = handle.read()
             if init_source.strip():
-                init_output = _load_source(session, parser, braket_parser, init_source)
+                previous_file = session.current_file
+                session.current_file = init_script
+                try:
+                    init_output = _load_source(session, parser, braket_parser, init_source)
+                finally:
+                    session.current_file = previous_file
                 if init_output:
                     print(init_output)
         except Exception:
@@ -927,6 +981,9 @@ def run() -> None:
                             target = parts[1].strip()
                             out_path = parts[2].strip() if len(parts) > 2 else None
                             _save_subroutine_to_disk(session, parser, target, out_path)
+                        break
+                    if not lines and stripped == ":setup-local-ai":
+                        _setup_local_ai_config()
                         break
                     if not lines and stripped == ":vars":
                         if hasattr(session, "variables"):

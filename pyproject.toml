@@ -1,9 +1,12 @@
 [project]
-name = "dirac-lang-py"
-version = "0.1.0"
+name = "diraclang"
+version = "0.1.1"
 description = "Python implementation of the DIRAC language runtime (port of the Node.js reference implementation)"
 requires-python = ">=3.10"
 readme = "README.md"
+dependencies = [
+	"PyYAML>=6.0",
+]
 
 [project.scripts]
 dirac-py = "dirac.cli:main"
@@ -17,3 +20,6 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["dirac*"]
+
+[tool.setuptools.package-data]
+dirac = ["lib/*.di", "lib/*.yml"]

@@ -4,6 +4,19 @@
 
 ## Quick Start
 
+Install on a fresh machine:
+
+```bash
+pipx install diraclang
+```
+
+Then start the shell and bootstrap a local Ollama config:
+
+```bash
+pash
+:setup-local-ai
+```
+
 ```bash
 cd dirac-python
 python3 -m unittest discover -s tests -v   # run the test suite

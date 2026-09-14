@@ -1,0 +1,11 @@
+# Reference configuration for local AI mode
+# Use with :setup-local-ai or copy to ~/.dirac/config.yml
+
+llmProvider: ollama
+llmModel: qwen2.5:3b
+questionMarkTarget: ai
+
+embeddingServer:
+  host: localhost
+  port: 11434
+  model: embeddinggemma

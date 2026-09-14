@@ -673,6 +673,28 @@ class TestCoreRuntime(unittest.TestCase):
         self.assertIn("? <text>  Enter AI mode and send the query", text)
         self.assertIn("blank line exits AI mode", text)
 
+    def test_shell_setup_local_ai_creates_reference_config(self):
+        from dirac import shell
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home = Path(tmpdir)
+            config_path = home / ".dirac" / "config.yml"
+
+            with patch.dict(os.environ, {"HOME": tmpdir}, clear=False), patch("builtins.input", side_effect=[":setup-local-ai", ":quit"]):
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    shell.run()
+
+            self.assertTrue(config_path.exists())
+            content = config_path.read_text(encoding="utf-8")
+            self.assertIn("llmProvider: ollama", content)
+            self.assertIn("llmModel: qwen2.5:3b", content)
+            self.assertIn("embeddingServer:", content)
+
+            text = out.getvalue()
+            self.assertIn("Created", text)
+            self.assertIn("ollama pull qwen2.5:3b", text)
+
     def test_shell_vars_pretty_prints_json_values(self):
         from dirac import shell
         from dirac.types import Variable
@@ -721,6 +743,20 @@ class TestCoreRuntime(unittest.TestCase):
         self.assertEqual(sources, ["|ai>explain recursion", "|ai>x = y"])
         self.assertTrue(mock_run.called)
         self.assertEqual(mock_run.call_args[0][0], "ls")
+
+    def test_install_local_ai_dry_run_uses_python_repo_copy(self):
+        src = """
+<dirac>
+    <import src="./lib/install-local-ai.di" />
+    <install-local-ai dryRun="true" />
+</dirac>
+"""
+
+        output = execute(src)
+        self.assertIn("Installing local AI companion from ~/diraclang/dirac-llm", output)
+        self.assertIn("Planned command: cd ~/diraclang/dirac-llm && bash setup.sh", output)
+        self.assertIn("Next: source ~/diraclang/dirac-llm/.venv/bin/activate", output)
+        self.assertIn("Next: python ~/diraclang/dirac-llm/mlx/python_script/stateless_chat_server_train_qwen.py", output)
 
     def test_shell_autoruns_common_unix_commands_in_braket_mode(self):
         from dirac import shell
