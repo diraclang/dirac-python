@@ -16,6 +16,7 @@ from ..tags.if_tag import execute_if
 from ..tags.import_tag import execute_import
 from ..tags.input_tag import execute_input
 from ..tags.list_subroutines import execute_list_subroutines
+from ..tags.load_context import execute_load_context
 from ..tags.llm_tag import execute_llm
 from ..tags.loop import execute_loop
 from ..tags.output import execute_output
@@ -53,8 +54,10 @@ _BUILTIN_TAGS = {
     "llm",
     "list-subroutines",
     "available-subroutines",
+    "inspect-subroutines",
     "index-subroutines",
     "search-subroutines",
+    "load-context",
 }
 
 
@@ -134,11 +137,19 @@ def integrate(session: DiracSession, element: DiracElement) -> None:
     if tag == "available-subroutines":
         execute_available_subroutines(session, element)
         return
+    if tag == "inspect-subroutines":
+        from ..tags.inspect_subroutines import execute_inspect_subroutines
+
+        execute_inspect_subroutines(session, element)
+        return
     if tag == "index-subroutines":
         execute_index_subroutines(session, element)
         return
     if tag == "search-subroutines":
         execute_search_subroutines(session, element)
+        return
+    if tag == "load-context":
+        execute_load_context(session, element)
         return
 
     # Not a built-in tag - treat as a direct subroutine call, e.g. <greet name="Alice" />

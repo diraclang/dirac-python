@@ -26,6 +26,7 @@ from .runtime.braket_parser import BraKetParser
 from .runtime.interpreter import integrate
 from .runtime.parser import DiracParser
 from .runtime.session import create_session
+from .tags.subroutine_index import registry
 from .types import DiracSession
 
 BANNER = """DIRAC Python Shell
@@ -133,7 +134,9 @@ def _bra_ket_tag_completion(session: DiracSession, text: str) -> list[str]:
     builtin_names = [
         "defvar", "variable", "assign", "output", "subroutine", "call",
         "parameters", "loop", "foreach", "break", "if", "test-if", "eval",
-        "python", "system", "input", "return", "import", "llm"
+        "python", "system", "input", "return", "import", "llm",
+        "list-subroutines", "available-subroutines", "inspect-subroutines",
+        "index-subroutines", "search-subroutines", "load-context",
     ]
     for name in builtin_names:
         if name.lower().startswith(partial.lower()):
@@ -198,9 +201,25 @@ def _native_tag_metadata() -> dict[str, list[dict[str, str]]]:
     return {}
 
 
+def _builtin_tag_metadata() -> dict[str, list[dict[str, str]]]:
+    """Fallback metadata for Dirac built-ins that are not represented in native-tags.di."""
+    return {
+        "list-subroutines": [{"name": "format", "description": "Output format"}, {"name": "output", "description": "Store output in a variable"}],
+        "available-subroutines": [{"name": "format", "description": "Output format"}],
+        "inspect-subroutines": [{"name": "name", "description": "Subroutine name to inspect"}, {"name": "format", "description": "Output format"}],
+        "index-subroutines": [{"name": "path", "description": "Directory or file to index"}],
+        "search-subroutines": [{"name": "query", "description": "Search terms or natural language query"}, {"name": "limit", "description": "Maximum number of results"}, {"name": "format", "description": "Output format"}],
+        "load-context": [{"name": "query", "description": "Search terms or natural language query"}, {"name": "limit", "description": "Maximum number of results"}, {"name": "import", "description": "Whether to import matching files"}],
+        "call": [{"name": "name", "description": "Subroutine to invoke"}],
+        "if": [{"name": "test", "description": "Condition to evaluate"}],
+        "foreach": [{"name": "items", "description": "Collection to iterate"}, {"name": "as", "description": "Loop variable name"}],
+        "output": [{"name": "value", "description": "Text or expression to emit"}],
+    }
+
+
 def _tag_parameter_suggestions(session: DiracSession, tag_name: str, prefix: str = "") -> list[str]:
     """Return parameter names for a tag, mixing session subroutines and native tag metadata."""
-    metadata = _native_tag_metadata()
+    metadata = {**_builtin_tag_metadata(), **_native_tag_metadata()}
     params_by_name: dict[str, list[dict[str, str]]] = {}
 
     for sub in getattr(session, "subroutines", []):
@@ -232,13 +251,15 @@ def _tag_name_suggestions(session: DiracSession, partial: str) -> list[str]:
         if name:
             names.add(str(name))
 
-    metadata = _native_tag_metadata()
+    metadata = {**_builtin_tag_metadata(), **_native_tag_metadata()}
     names.update(metadata.keys())
 
     builtin_names = [
         "defvar", "variable", "assign", "output", "subroutine", "call",
         "parameters", "loop", "foreach", "break", "if", "test-if", "eval",
-        "python", "system", "input", "return", "import", "llm"
+        "python", "system", "input", "return", "import", "llm",
+        "list-subroutines", "available-subroutines", "inspect-subroutines",
+        "index-subroutines", "search-subroutines", "load-context",
     ]
     names.update(builtin_names)
 
@@ -289,7 +310,7 @@ def _command_subroutine_completion(session: DiracSession, text: str) -> list[str
 
 def _emit_tag_parameter_help(tag_name: str, session: DiracSession) -> None:
     """Print parameter names/descriptions like the TypeScript shell does."""
-    metadata = _native_tag_metadata()
+    metadata = {**_builtin_tag_metadata(), **_native_tag_metadata()}
     params_by_name: dict[str, list[dict[str, str]]] = {}
     for sub in getattr(session, "subroutines", []):
         name = getattr(sub, "name", None)
@@ -399,13 +420,10 @@ def _readline_completer(text: str, state: int, session: DiracSession | None = No
 
     active_text = text
     if full_buffer and full_buffer.strip():
-        if (
-            full_buffer.strip().startswith("|")
-            or full_buffer.strip().startswith(":")
-            or "=" in full_buffer
-            or full_buffer.strip().startswith(("cd ", "ls ", "cat ", "vim ", "nano "))
-        ):
+        if full_buffer.strip().startswith(":") or "=" in full_buffer or full_buffer.strip().startswith(("cd ", "ls ", "cat ", "vim ", "nano ")):
             active_text = full_buffer.strip()
+        elif full_buffer.strip().startswith("|"):
+            active_text = full_buffer
 
     command_matches = _command_subroutine_completion(session, active_text)
     if command_matches:
@@ -591,6 +609,9 @@ def _setup_local_ai_config() -> None:
 HELP = """Commands:
   :vars    List current variables
   :subs    List registered subroutines
+  :index <path>  Rebuild the disk-backed subroutine registry for a directory
+  :search <query>  Search the disk registry for matching subroutines
+  :load <query>  Search, then import the matching files into the session
   :debug   Toggle debug logging
   :braket  Toggle bra-ket notation mode (default: XML)
   :shell   Toggle shell mode for running Unix commands directly
@@ -773,6 +794,31 @@ def _is_within_directory(path: str, root: str) -> bool:
         return os.path.commonpath([path, root]) == root
     except ValueError:
         return False
+
+
+def _xml_attribute(value: str) -> str:
+    """Escape an XML attribute value for shell-generated tag commands."""
+    return (
+        str(value)
+        .replace("&", "&amp;")
+        .replace('"', "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def _run_shell_xml(session: DiracSession, parser: DiracParser, xml_source: str) -> None:
+    """Execute XML generated by shell commands while preserving output in the session."""
+    before = len(session.output)
+    try:
+        ast = parser.parse(xml_source)
+        integrate(session, ast)
+    except Exception as exc:  # pragma: no cover - user-visible shell error path
+        print(f"Error: {exc}")
+        return
+    new_output = "".join(session.output[before:]).strip()
+    if new_output:
+        print(new_output)
 
 
 def _autosave_user_subroutines_on_exit(
@@ -1012,6 +1058,33 @@ def run() -> None:
                             target = parts[1].strip()
                             out_path = parts[2].strip() if len(parts) > 2 else None
                             _save_subroutine_to_disk(session, parser, target, out_path)
+                        break
+                    if not lines and stripped.startswith(":index"):
+                        parts = stripped.split(maxsplit=1)
+                        if len(parts) < 2:
+                            print("Usage: :index <path>")
+                        else:
+                            index_path = parts[1].strip()
+                            registry.refresh()
+                            _run_shell_xml(session, parser, f'<index-subroutines path="{_xml_attribute(index_path)}" />')
+                        break
+                    if not lines and stripped.startswith(":search"):
+                        parts = stripped.split(maxsplit=1)
+                        if len(parts) < 2:
+                            print("Usage: :search <query>")
+                        else:
+                            query = parts[1].strip()
+                            registry.refresh()
+                            _run_shell_xml(session, parser, f'<search-subroutines query="{_xml_attribute(query)}" format="text" />')
+                        break
+                    if not lines and stripped.startswith(":load"):
+                        parts = stripped.split(maxsplit=1)
+                        if len(parts) < 2:
+                            print("Usage: :load <query>")
+                        else:
+                            query = parts[1].strip()
+                            registry.refresh()
+                            _run_shell_xml(session, parser, f'<load-context query="{_xml_attribute(query)}" limit="5" import="true" />')
                         break
                     if not lines and stripped == ":setup-local-ai":
                         _setup_local_ai_config()

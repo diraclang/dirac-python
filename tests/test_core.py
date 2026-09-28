@@ -22,7 +22,8 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from dirac import execute  # noqa: E402
-from dirac.shell import run_shell_command  # noqa: E402
+from dirac.shell import _bra_ket_attribute_completion, _tag_name_suggestions, _tag_parameter_suggestions, run_shell_command  # noqa: E402
+from dirac.tags.subroutine_index import registry as global_registry  # noqa: E402
 
 _WHITESPACE_RE = re.compile(r"\s+")
 
@@ -87,7 +88,41 @@ class TestCoreRuntime(unittest.TestCase):
         self.assertIn('name="gender"', output)
         self.assertNotIn('name="Person"', output)
 
+    def test_inspect_subroutines_shows_nested_subroutines_without_executing_parent(self):
+        src = """
+<dirac>
+  <subroutine name="Person" description="Represents a person">
+    <subroutine name="age" param-value="integer:required:Age of the person">
+      <output>age</output>
+    </subroutine>
+    <subroutine name="gender" param-type="string:optional:Gender M/F">
+      <output>gender</output>
+    </subroutine>
+  </subroutine>
+  <inspect-subroutines name="Person" format="xml" />
+</dirac>
+"""
+        output = execute(src)
+        self.assertIn('scope="nested"', output)
+        self.assertIn('name="age"', output)
+        self.assertIn('name="gender"', output)
+        self.assertNotIn('name="Person"', output)
+        self.assertIn('source="memory"', output)
+
+    def test_inspect_subroutines_is_in_shell_tag_completion(self):
+        suggestions = _tag_name_suggestions({}, "ins")
+        self.assertTrue(any("inspect-subroutines" in name for name in suggestions))
+
+    def test_inspect_subroutines_shows_name_attribute_in_parameter_completion(self):
+        suggestions = _tag_parameter_suggestions({}, "inspect-subroutines")
+        self.assertIn("name=", suggestions)
+
+    def test_inspect_subroutines_attribute_completion_after_space(self):
+        suggestions = _bra_ket_attribute_completion({}, "|inspect-subroutines ")
+        self.assertIn("name=", suggestions)
+
     def test_search_subroutines_finds_matching_registry_entry(self):
+        global_registry.index = {"subroutines": [], "lastUpdated": 0}
         with tempfile.TemporaryDirectory() as tmpdir:
             lib_path = os.path.join(tmpdir, "demo-library.di")
             with open(lib_path, "w", encoding="utf-8") as handle:
@@ -110,6 +145,78 @@ class TestCoreRuntime(unittest.TestCase):
             output = execute(src)
             self.assertIn("set-background-color", output)
             self.assertIn("background", output.lower())
+
+    def test_load_context_matches_node_behavior_for_registry_lookup(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            global_registry.index_path = os.path.join(tmpdir, "subroutine-index.json")
+            global_registry.index = {"subroutines": [], "lastUpdated": 0}
+            lib_path = os.path.join(tmpdir, "demo-library.di")
+            with open(lib_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    '''
+<dirac>
+  <subroutine name="set-background-color" description="Change the background color to a chosen value" param-color="string:required:Desired color">
+    <output>Color set</output>
+  </subroutine>
+</dirac>
+'''
+                )
+
+            src = f'''
+<dirac>
+  <index-subroutines path="{tmpdir}" />
+  <load-context query="background color" limit="5" import="false" />
+</dirac>
+'''
+            output = execute(src)
+            self.assertIn("Found 1 subroutine(s)", output)
+            self.assertIn("set-background-color", output)
+            self.assertIn("Importing 1 file(s)", output)
+            global_registry.index_path = str(Path.home() / ".dirac" / "subroutine-index.json")
+            global_registry.index = {"subroutines": [], "lastUpdated": 0}
+
+    def test_registry_refreshes_from_disk_before_search(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            index_path = os.path.join(tmpdir, "subroutine-index.json")
+            lib_path = os.path.join(tmpdir, "library.di")
+            with open(lib_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    '''
+<dirac>
+  <subroutine name="alpha-helper" description="Alpha helper routine">
+    <output>Alpha</output>
+  </subroutine>
+</dirac>
+'''
+                )
+            with open(index_path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "subroutines": [
+                            {
+                                "name": "alpha-helper",
+                                "description": "Alpha helper routine",
+                                "parameters": [],
+                                "filePath": lib_path,
+                                "sourceCode": "",
+                            }
+                        ],
+                        "lastUpdated": 1,
+                    },
+                    handle,
+                )
+
+            old_index = global_registry.index
+            global_registry.index_path = index_path
+            global_registry.index = {"subroutines": [], "lastUpdated": 0}
+
+            try:
+                results = global_registry.search("alpha", 10)
+                self.assertTrue(results)
+                self.assertEqual(results[0]["name"], "alpha-helper")
+            finally:
+                global_registry.index = old_index
+                global_registry.index_path = str(Path.home() / ".dirac" / "subroutine-index.json")
 
     def test_defvar_and_variable_substitution(self):
         src = """

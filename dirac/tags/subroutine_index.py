@@ -44,13 +44,31 @@ class SubroutineRegistry:
             cls._instance._load_index()
         return cls._instance
 
+    @staticmethod
+    def _dedupe_subroutines(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        deduped: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            key = (str(entry.get("name", "")), str(entry.get("filePath") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(entry)
+        return deduped
+
     def _load_index(self) -> None:
         path = Path(self.index_path)
         if path.exists():
             try:
                 with path.open("r", encoding="utf-8") as handle:
                     data = json.load(handle)
-                self.index = data if isinstance(data, dict) else {"subroutines": [], "lastUpdated": 0}
+                loaded = data if isinstance(data, dict) else {"subroutines": [], "lastUpdated": 0}
+                self.index = {
+                    "subroutines": self._dedupe_subroutines(loaded.get("subroutines", [])),
+                    "lastUpdated": loaded.get("lastUpdated", 0),
+                }
             except Exception:
                 self.index = {"subroutines": [], "lastUpdated": 0}
         else:
@@ -63,7 +81,12 @@ class SubroutineRegistry:
         with path.open("w", encoding="utf-8") as handle:
             json.dump(self.index, handle, indent=2)
 
+    def refresh(self) -> dict[str, Any]:
+        self._load_index()
+        return self.index
+
     def index_directory(self, dir_path: str) -> int:
+        self.refresh()
         resolved = Path(dir_path)
         if not resolved.is_absolute():
             resolved = (Path.cwd() / resolved).resolve()
@@ -75,6 +98,7 @@ class SubroutineRegistry:
         return count
 
     def index_file(self, file_path: str) -> int:
+        self.refresh()
         try:
             with open(file_path, "r", encoding="utf-8") as handle:
                 content = handle.read()
@@ -89,6 +113,7 @@ class SubroutineRegistry:
 
         subroutines = self._extract_subroutines(ast, file_path)
         self.index["subroutines"].extend(sub.to_dict() for sub in subroutines)
+        self.index["subroutines"] = self._dedupe_subroutines(self.index["subroutines"])
         self._save_index()
         return len(subroutines)
 
@@ -126,6 +151,7 @@ class SubroutineRegistry:
         return results
 
     def search(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
+        self.refresh()
         lower_query = query.lower()
         tokens = [token for token in re_split_tokens(lower_query) if token]
 
@@ -180,12 +206,22 @@ class SubroutineRegistry:
                 results.append((sub, score))
 
         results.sort(key=lambda item: item[1], reverse=True)
-        return [sub for sub, _ in results[:limit]]
+        seen: set[tuple[str, str]] = set()
+        unique: list[dict[str, Any]] = []
+        for sub, _ in results[:limit]:
+            key = (str(sub.get("name", "")), str(sub.get("filePath") or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(sub)
+        return unique
 
     def get_all(self) -> list[dict[str, Any]]:
+        self.refresh()
         return list(self.index.get("subroutines", []))
 
     def get_stats(self) -> dict[str, Any]:
+        self.refresh()
         subroutines = self.index.get("subroutines", [])
         files = {sub.get("filePath") for sub in subroutines if sub.get("filePath")}
         return {
