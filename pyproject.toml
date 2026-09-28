@@ -9,9 +9,10 @@ dependencies = [
 ]
 
 [project.scripts]
+dirac = "dirac.cli:main"
 dirac-py = "dirac.cli:main"
 dirac-py-shell = "dirac.shell:run"
-paul = "dirac.cli:main"
+paul = "dirac.shell:run"
 pash = "dirac.shell:run"
 
 [build-system]

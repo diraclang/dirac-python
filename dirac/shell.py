@@ -93,18 +93,19 @@ def _complete_path_token(prefix: str) -> list[str]:
             continue
         candidate = os.path.join(search_dir, name)
 
-        if prefix.startswith("~/"):
+        if prefix.startswith("~/") or prefix == "~":
             rel_path = os.path.relpath(candidate, home_dir)
             display = os.path.join("~", rel_path)
         elif prefix.startswith("~"):
-            display = name
-        elif prefix.startswith("/") or prefix.startswith("./") or prefix.startswith("../"):
-            display = name
+            display = os.path.join("~", name)
+        elif head:
+            display = os.path.join(head, name)
         else:
             display = name
 
         if os.path.isdir(candidate):
-            display = display + os.sep
+            if not display.endswith(os.sep):
+                display = display + os.sep
         matches.append(display)
 
     return matches

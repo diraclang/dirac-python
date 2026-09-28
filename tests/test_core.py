@@ -49,6 +49,68 @@ class TestCoreRuntime(unittest.TestCase):
         src = "<output>one</output><output>two</output>"
         self.assertEqual(normalize(execute(src)), "onetwo")
 
+    def test_list_subroutines_outputs_registered_names(self):
+        src = """
+<dirac>
+  <subroutine name="greet" param-name="string">
+    <output>Hello</output>
+  </subroutine>
+  <subroutine name="farewell">
+    <output>Bye</output>
+  </subroutine>
+  <list-subroutines format="text" />
+</dirac>
+"""
+        output = execute(src)
+        self.assertIn("greet", output)
+        self.assertIn("farewell", output)
+        self.assertIn("Available subroutines", output)
+
+    def test_available_subroutines_uses_current_scope_only(self):
+        src = """
+<dirac>
+  <subroutine name="Person" description="Represents a person">
+    <subroutine name="age" param-value="integer:required:Age of the person">
+      <output>age</output>
+    </subroutine>
+    <subroutine name="gender" param-type="string:optional:Gender M/F">
+      <output>gender</output>
+    </subroutine>
+    <available-subroutines />
+  </subroutine>
+  <Person />
+</dirac>
+"""
+        output = execute(src)
+        self.assertIn('scope="available"', output)
+        self.assertIn('name="age"', output)
+        self.assertIn('name="gender"', output)
+        self.assertNotIn('name="Person"', output)
+
+    def test_search_subroutines_finds_matching_registry_entry(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lib_path = os.path.join(tmpdir, "demo-library.di")
+            with open(lib_path, "w", encoding="utf-8") as handle:
+                handle.write(
+                    '''
+<dirac>
+  <subroutine name="set-background-color" description="Change the background color to a chosen value" param-color="string:required:Desired color">
+    <output>Color set</output>
+  </subroutine>
+</dirac>
+'''
+                )
+
+            src = f'''
+<dirac>
+  <index-subroutines path="{tmpdir}" />
+  <search-subroutines query="background color" limit="5" format="text" />
+</dirac>
+'''
+            output = execute(src)
+            self.assertIn("set-background-color", output)
+            self.assertIn("background", output.lower())
+
     def test_defvar_and_variable_substitution(self):
         src = """
 <dirac>
@@ -563,7 +625,7 @@ class TestCoreRuntime(unittest.TestCase):
                 completer = mock_readline.set_completer.call_args[0][0]
 
             result = completer(f"cd {tmpdir}/de", 0)
-            self.assertTrue(result.startswith("demo-dir"))
+            self.assertTrue(result == os.path.join(tmpdir, "demo-dir") + os.sep)
 
     def test_shell_autocomplete_suggests_bra_ket_attributes_for_existing_tag(self):
         from dirac import shell
@@ -675,6 +737,17 @@ class TestCoreRuntime(unittest.TestCase):
         self.assertTrue(nested_matches)
         self.assertTrue(any(match.startswith("~/Downloads/IMG_") for match in nested_matches))
         self.assertTrue(all(not match.startswith("~/Downloads/Downloads/") for match in nested_matches))
+
+    def test_shell_autocomplete_preserves_existing_absolute_path_prefix(self):
+        from dirac import shell
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target_dir = os.path.join(tmpdir, "demo-dir")
+            os.mkdir(target_dir)
+
+            matches = shell._complete_path_token(os.path.join(tmpdir, "de"))
+            self.assertTrue(matches)
+            self.assertTrue(any(match == os.path.join(tmpdir, "demo-dir") + os.sep for match in matches))
 
     def test_shell_runs_init_script_on_startup(self):
         from dirac import shell

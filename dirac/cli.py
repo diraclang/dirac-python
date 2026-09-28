@@ -1,6 +1,7 @@
 """
-Command-line interface for the DIRAC Python runtime.
-Mirrors dirac/src/cli.ts (single-file execution mode only, for now).
+Command-line interface for running a DIRAC script file.
+
+Use `paul` or `pash` to start the interactive shell.
 """
 
 import argparse
@@ -10,7 +11,10 @@ from . import execute
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="paul", description="Run a DIRAC (.di or .bk) script.")
+    parser = argparse.ArgumentParser(
+        prog="dirac",
+        description="Run a DIRAC (.di or .bk) script file.",
+    )
     parser.add_argument("file", help="Path to a .di (XML) or .bk (bra-ket) file to execute")
     parser.add_argument(
         "--format",

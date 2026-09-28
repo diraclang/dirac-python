@@ -6,6 +6,7 @@ Mirrors dirac/src/runtime/interpreter.ts from the Node.js reference implementati
 from ..types import DiracElement, DiracSession
 from .session import emit, substitute_attribute
 from ..tags.assign import execute_assign
+from ..tags.available_subroutines import execute_available_subroutines
 from ..tags.break_tag import execute_break
 from ..tags.call import execute_call
 from ..tags.defvar import execute_defvar
@@ -14,12 +15,14 @@ from ..tags.foreach import execute_foreach
 from ..tags.if_tag import execute_if
 from ..tags.import_tag import execute_import
 from ..tags.input_tag import execute_input
+from ..tags.list_subroutines import execute_list_subroutines
 from ..tags.llm_tag import execute_llm
 from ..tags.loop import execute_loop
 from ..tags.output import execute_output
 from ..tags.parameters_tag import execute_parameters
 from ..tags.return_tag import execute_return
 from ..tags.subroutine import execute_subroutine
+from ..tags.subroutine_index import execute_index_subroutines, execute_search_subroutines
 from ..tags.system import execute_system
 from ..tags.test_if import execute_test_if
 from ..tags.variable import execute_variable
@@ -48,6 +51,10 @@ _BUILTIN_TAGS = {
     "return",
     "import",
     "llm",
+    "list-subroutines",
+    "available-subroutines",
+    "index-subroutines",
+    "search-subroutines",
 }
 
 
@@ -120,6 +127,18 @@ def integrate(session: DiracSession, element: DiracElement) -> None:
         return
     if tag == "llm":
         execute_llm(session, element)
+        return
+    if tag == "list-subroutines":
+        execute_list_subroutines(session, element)
+        return
+    if tag == "available-subroutines":
+        execute_available_subroutines(session, element)
+        return
+    if tag == "index-subroutines":
+        execute_index_subroutines(session, element)
+        return
+    if tag == "search-subroutines":
+        execute_search_subroutines(session, element)
         return
 
     # Not a built-in tag - treat as a direct subroutine call, e.g. <greet name="Alice" />
